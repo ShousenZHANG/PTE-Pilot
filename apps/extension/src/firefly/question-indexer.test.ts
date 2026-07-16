@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { QuestionIdentity } from "../domain/types";
-import type { NavigationCoordinator } from "./navigation-coordinator";
-import { QuestionIndexer } from "./question-indexer";
+import type {
+  NavigationCoordinator,
+  NavigationIntent,
+} from "./navigation-coordinator";
+import { type IndexSitePort, QuestionIndexer } from "./question-indexer";
 
-function identity(position: number): QuestionIdentity {
+function identity(position: number, total = 3): QuestionIdentity {
   return {
     predictionEdition: "weekly-2026-W29",
     questionId: `q-${position}`,
     position,
-    total: 3,
+    total,
     tags: [],
   };
 }
@@ -91,6 +94,98 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("QuestionIndexer", () => {
+  it("hard-cancels an in-flight traversal without restoring or clicking again", async () => {
+    let current = identity(1);
+    const intents: NavigationIntent[] = [];
+    let navigationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      navigationStarted = resolve;
+    });
+    const navigation = {
+      navigate(
+        intent: NavigationIntent,
+        _timeoutMs?: number,
+        signal?: AbortSignal,
+      ) {
+        intents.push(intent);
+        current = identity(2);
+        navigationStarted?.();
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("navigation:aborted")),
+            { once: true },
+          );
+        });
+      },
+    } as unknown as NavigationCoordinator;
+    const indexer = new QuestionIndexer(
+      {
+        readIdentity: () => current,
+        questionOptions: () => null,
+      },
+      navigation,
+      {
+        saveQuestion: async () => undefined,
+        saveSnapshot: async () => undefined,
+      },
+    );
+
+    const traversal = indexer.controlledTraversal();
+    await started;
+    expect(indexer.hardCancel()).toBe(true);
+
+    await expect(traversal).resolves.toMatchObject({ completeness: "partial" });
+    expect(intents).toEqual([{ kind: "next" }]);
+    expect(current).toEqual(identity(2));
+  });
+
+  it("dispose hard-cancels traversal and skips origin restoration", async () => {
+    let current = identity(1);
+    let navigationCalls = 0;
+    let navigationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      navigationStarted = resolve;
+    });
+    const navigation = {
+      navigate(
+        _intent: NavigationIntent,
+        _timeoutMs?: number,
+        signal?: AbortSignal,
+      ) {
+        navigationCalls += 1;
+        current = identity(2);
+        navigationStarted?.();
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("navigation:aborted")),
+            { once: true },
+          );
+        });
+      },
+    } as unknown as NavigationCoordinator;
+    const indexer = new QuestionIndexer(
+      {
+        readIdentity: () => current,
+        questionOptions: () => null,
+      },
+      navigation,
+      {
+        saveQuestion: async () => undefined,
+        saveSnapshot: async () => undefined,
+      },
+    );
+
+    const traversal = indexer.controlledTraversal();
+    await started;
+    indexer.dispose();
+
+    await expect(traversal).resolves.toMatchObject({ completeness: "partial" });
+    expect(navigationCalls).toBe(1);
+    expect(current).toEqual(identity(2));
+  });
+
   it("pauses between verified native navigation steps and resumes", async () => {
     const fixture = setup();
     const traversal = fixture.indexer.controlledTraversal();
@@ -149,6 +244,155 @@ describe("QuestionIndexer", () => {
     expect(snapshot.completeness).toBe("complete");
     expect(snapshot.orderedQuestionIds).toEqual(["q-1", "q-2", "q-3"]);
     expect(fixture.calls()).toBe(0);
+  });
+
+  it("restores the origin with one verified direct selection when supported", async () => {
+    let current = identity(1);
+    const intents: NavigationIntent[] = [];
+    const savedQuestions: string[] = [];
+    const site = {
+      readIdentity: () => current,
+      questionOptions: () => null,
+      supportsDirectSelection: () => true,
+    } as IndexSitePort & { supportsDirectSelection(): boolean };
+    const navigation = {
+      async navigate(intent: NavigationIntent) {
+        intents.push(intent);
+        const position =
+          intent.kind === "select"
+            ? intent.position
+            : current.position + (intent.kind === "next" ? 1 : -1);
+        current = identity(position);
+        return { identity: current, epoch: intents.length };
+      },
+    } as NavigationCoordinator;
+    const indexer = new QuestionIndexer(site, navigation, {
+      saveQuestion: async (question) => {
+        savedQuestions.push(question.questionId);
+      },
+      saveSnapshot: async () => undefined,
+    });
+
+    const snapshot = await indexer.controlledTraversal();
+
+    expect(snapshot.completeness).toBe("complete");
+    expect(current).toEqual(identity(1));
+    expect(intents).toEqual([
+      { kind: "select", position: 2 },
+      { kind: "select", position: 3 },
+      { kind: "select", position: 1, expectedQuestionId: "q-1" },
+    ]);
+    expect(savedQuestions.at(-1)).toBe("q-1");
+  });
+
+  it("rejects a direct restore whose returned identity differs from the origin", async () => {
+    let current = identity(1);
+    const site = {
+      readIdentity: () => current,
+      questionOptions: () => null,
+      supportsDirectSelection: () => true,
+    } as IndexSitePort & { supportsDirectSelection(): boolean };
+    const navigation = {
+      async navigate(intent: NavigationIntent) {
+        if (intent.kind === "select") {
+          current = {
+            ...identity(intent.position),
+            predictionEdition: "wrong-edition",
+          };
+        } else {
+          current = identity(
+            current.position + (intent.kind === "next" ? 1 : -1),
+          );
+        }
+        return { identity: current, epoch: 1 };
+      },
+    } as NavigationCoordinator;
+    const indexer = new QuestionIndexer(site, navigation, {
+      saveQuestion: async () => undefined,
+      saveSnapshot: async () => undefined,
+    });
+
+    const snapshot = await indexer.controlledTraversal();
+
+    expect(snapshot.completeness).toBe("partial");
+    expect(indexer.failureReason).toBe("index:restore-mismatch");
+  });
+
+  it("direct-selects every missing position from a middle origin and checkpoints each result", async () => {
+    let current = identity(3, 5);
+    const intents: NavigationIntent[] = [];
+    const savedQuestions: number[] = [];
+    const checkpointPositions: Array<number | undefined> = [];
+    const site = {
+      readIdentity: () => current,
+      questionOptions: () => null,
+      supportsDirectSelection: () => true,
+    } as IndexSitePort & { supportsDirectSelection(): boolean };
+    const navigation = {
+      async navigate(intent: NavigationIntent) {
+        intents.push(intent);
+        const position =
+          intent.kind === "select"
+            ? intent.position
+            : current.position + (intent.kind === "next" ? 1 : -1);
+        current = identity(position, 5);
+        return { identity: current, epoch: intents.length };
+      },
+    } as NavigationCoordinator;
+    const indexer = new QuestionIndexer(site, navigation, {
+      saveQuestion: async (question) => {
+        savedQuestions.push(question.sitePosition);
+      },
+      saveSnapshot: async (snapshot) => {
+        checkpointPositions.push(snapshot.checkpointPosition);
+      },
+    });
+
+    const snapshot = await indexer.controlledTraversal();
+
+    expect(snapshot.completeness).toBe("complete");
+    expect(current).toEqual(identity(3, 5));
+    expect(intents).toEqual([
+      { kind: "select", position: 1 },
+      { kind: "select", position: 2 },
+      { kind: "select", position: 4 },
+      { kind: "select", position: 5 },
+      { kind: "select", position: 3, expectedQuestionId: "q-3" },
+    ]);
+    expect(savedQuestions).toEqual([3, 1, 2, 4, 5, 3]);
+    expect(checkpointPositions.slice(0, 4)).toEqual([1, 2, 4, 5]);
+  });
+
+  it("keeps step navigation when direct selection is unsupported", async () => {
+    let current = identity(2);
+    const intents: NavigationIntent[] = [];
+    const navigation = {
+      async navigate(intent: NavigationIntent) {
+        intents.push(intent);
+        if (intent.kind === "select") throw new Error("unexpected-select");
+        current = identity(
+          current.position + (intent.kind === "next" ? 1 : -1),
+        );
+        return { identity: current, epoch: intents.length };
+      },
+    } as NavigationCoordinator;
+    const indexer = new QuestionIndexer(
+      {
+        readIdentity: () => current,
+        questionOptions: () => null,
+      },
+      navigation,
+      {
+        saveQuestion: async () => undefined,
+        saveSnapshot: async () => undefined,
+      },
+    );
+
+    const snapshot = await indexer.controlledTraversal();
+
+    expect(snapshot.completeness).toBe("complete");
+    expect(current).toEqual(identity(2));
+    expect(intents.every((intent) => intent.kind !== "select")).toBe(true);
   });
 
   it("can pause and cancel a structured selector index while checkpoints are saving", async () => {

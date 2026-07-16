@@ -75,6 +75,17 @@ function begin(armedAt = 1_000) {
 }
 
 describe("Firefly audio capture background", () => {
+  test("accepts the live exercise sender after pageSource is stripped", async () => {
+    const harness = createBrowser();
+    const stop = startAudioCaptureBackground(harness.browserApi);
+
+    await expect(
+      harness.message(begin(), "https://www.fireflyau.com/ptehome/exercise"),
+    ).resolves.toMatchObject({ ok: true, action: "audio/captureBegin" });
+
+    stop();
+  });
+
   test("requires exact weekly-prediction sender URL", async () => {
     const harness = createBrowser();
     const stop = startAudioCaptureBackground(harness.browserApi);
@@ -85,6 +96,26 @@ describe("Firefly audio capture background", () => {
         "https://www.fireflyau.com/ptehome/exercise?pageSource=other",
       ),
     ).resolves.toMatchObject({ ok: false, reason: "untrusted-sender" });
+
+    stop();
+  });
+
+  test.each([
+    "https://www.fireflyau.com/ptehome/exercise?pageSource=",
+    "https://www.fireflyau.com/ptehome/exercise?pageSource=other",
+    "https://www.fireflyau.com/ptehome/exercise?pageSource=yc&pageSource=yc",
+    "http://www.fireflyau.com/ptehome/exercise?pageSource=yc",
+    "https://www.fireflyau.com:444/ptehome/exercise?pageSource=yc",
+    "https://evil.fireflyau.com/ptehome/exercise?pageSource=yc",
+    "https://www.fireflyau.com/ptehome/other?pageSource=yc",
+  ])("rejects untrusted audio sender URL %s", async (url) => {
+    const harness = createBrowser();
+    const stop = startAudioCaptureBackground(harness.browserApi);
+
+    await expect(harness.message(begin(), url)).resolves.toMatchObject({
+      ok: false,
+      reason: "untrusted-sender",
+    });
 
     stop();
   });

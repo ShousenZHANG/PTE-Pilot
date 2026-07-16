@@ -13,13 +13,21 @@ import type {
   IndexSnapshot,
   PracticeMode,
   PracticePhase,
+  ProbeResult,
   QuestionIdentity,
   ReviewResult,
 } from "../domain/types";
 import { AnswerGate } from "../firefly/answer-gate";
 import { AudioBroker } from "../firefly/audio-broker";
-import { FireflyDomAdapter } from "../firefly/dom-adapter";
+import {
+  FireflyDomAdapter,
+  isVerifiedQuestionSetEdition,
+} from "../firefly/dom-adapter";
 import { NavigationCoordinator } from "../firefly/navigation-coordinator";
+import {
+  PredictionEditionBootstrap,
+  type PredictionEditionBootstrapResult,
+} from "../firefly/prediction-edition-bootstrap";
 import {
   type IndexCheckpointPort,
   QuestionIndexer,
@@ -94,6 +102,13 @@ export async function runGuardedControllerOperation(options: {
   }
 }
 
+export function shouldBootstrapPredictionEdition(probe: ProbeResult): boolean {
+  return (
+    !probe.ok &&
+    probe.diagnostic.detail === "question:prediction-edition-unverified"
+  );
+}
+
 export class PracticeController extends EventTarget {
   readonly #site: FireflyDomAdapter;
   readonly #runtime: RuntimeClient;
@@ -102,6 +117,8 @@ export class PracticeController extends EventTarget {
   #answerGate: AnswerGate | null = null;
   #audio: AudioBroker | null = null;
   #indexer: QuestionIndexer | null = null;
+  #checkpoints: RuntimeIndexCheckpoints | null = null;
+  #predictionBootstrap: PredictionEditionBootstrap | null = null;
   #settings: UserSettings = defaultSettings();
   #draftRevision = 0;
   #startedAt = performance.now();
@@ -147,17 +164,66 @@ export class PracticeController extends EventTarget {
 
   async initialize(preflight?: Promise<unknown>): Promise<void> {
     const generation = ++this.#initializeGeneration;
-    this.teardownActivePorts();
+    const cleanup = this.teardownActivePorts();
     this.patch({
       phase: "PROBING",
       siteStatus: "正在验证萤火虫页面",
       fault: null,
     });
+    await cleanup;
+    if (!this.isCurrentInitialization(generation)) return;
     if (preflight) {
       await preflight;
       if (!this.isCurrentInitialization(generation)) return;
     }
-    const probe = this.#site.probe();
+    let probe = this.#site.probe();
+    let bootstrapResult: PredictionEditionBootstrapResult | null = null;
+    if (shouldBootstrapPredictionEdition(probe)) {
+      const bootstrap = new PredictionEditionBootstrap(this.#site);
+      this.#predictionBootstrap = bootstrap;
+      bootstrap.addEventListener("progress", (event) => {
+        if (
+          !this.isCurrentInitialization(generation) ||
+          this.#predictionBootstrap !== bootstrap
+        )
+          return;
+        const { completed, total } = (
+          event as CustomEvent<{ completed: number; total: number }>
+        ).detail;
+        this.patch({ notice: `正在验证周预测题集 ${completed}/${total}` });
+      });
+      this.patch({
+        phase: "PROBING",
+        indexStatus: "DISCOVERING",
+        siteStatus: "首次验证周预测题集",
+        notice: "正在依次读取周预测题号；完成后自动恢复当前题",
+      });
+      try {
+        bootstrapResult = await bootstrap.run();
+      } catch (error) {
+        if (
+          !this.isCurrentInitialization(generation) ||
+          this.#predictionBootstrap !== bootstrap
+        )
+          return;
+        this.#predictionBootstrap = null;
+        await bootstrap.dispose();
+        const message = safeError(error);
+        this.patch({
+          phase: "SITE_CHANGED",
+          indexStatus: "FAILED",
+          siteStatus: "周预测题集验证失败",
+          notice: message,
+          fault: diagnosticFault("SITE_CHANGED", message),
+        });
+        return;
+      }
+      if (this.#predictionBootstrap === bootstrap)
+        this.#predictionBootstrap = null;
+      await bootstrap.dispose();
+      if (!this.isCurrentInitialization(generation)) return;
+      probe = this.#site.probe();
+    }
     if (!probe.ok) {
       const fault = diagnosticFault(
         probe.diagnostic.code,
@@ -190,8 +256,37 @@ export class PracticeController extends EventTarget {
     });
 
     const checkpoints = new RuntimeIndexCheckpoints(this.#runtime);
-    await checkpoints.hydrate(probe.identity.predictionEdition);
+    try {
+      if (bootstrapResult) await checkpoints.adoptBootstrap(bootstrapResult);
+      else await checkpoints.hydrate(probe.identity.predictionEdition);
+    } catch (error) {
+      if (this.isCurrentInitialization(generation))
+        this.fail("STORAGE_ERROR", "周预测索引保存失败", error);
+      return;
+    }
+    if (
+      !bootstrapResult &&
+      checkpoints.hasCompleteEdition(
+        probe.identity.predictionEdition,
+        probe.identity.total,
+      ) &&
+      !checkpoints.isCompleteFor(probe.identity)
+    ) {
+      this.#site.invalidateVerifiedPredictionEdition(
+        probe.identity.predictionEdition,
+      );
+      if (this.isCurrentInitialization(generation)) {
+        this.patch({
+          phase: "PROBING",
+          indexStatus: "IDLE",
+          notice: "周预测题集已变化，正在重新验证",
+        });
+        await this.initialize();
+      }
+      return;
+    }
     if (!this.isCurrentInitialization(generation)) return;
+    this.#checkpoints = checkpoints;
     this.#indexer = new QuestionIndexer(
       this.#site,
       this.#navigation,
@@ -907,7 +1002,7 @@ export class PracticeController extends EventTarget {
   dispose(): void {
     this.#disposed = true;
     this.#initializeGeneration += 1;
-    this.teardownActivePorts();
+    void this.teardownActivePorts();
   }
 
   private async restoreQuestion(
@@ -948,6 +1043,24 @@ export class PracticeController extends EventTarget {
   ): Promise<void> {
     const generation = this.#initializeGeneration;
     if (!this.isCurrentInitialization(generation)) return;
+    if (
+      this.#checkpoints?.hasCompleteEdition(
+        identity.predictionEdition,
+        identity.total,
+      ) &&
+      !this.#checkpoints.isCompleteFor(identity)
+    ) {
+      this.#site.invalidateVerifiedPredictionEdition(
+        identity.predictionEdition,
+      );
+      this.patch({
+        phase: "PROBING",
+        indexStatus: "IDLE",
+        notice: "检测到周预测题目变化，正在重新验证",
+      });
+      void this.initialize(this.flushDraft().catch(() => undefined));
+      return;
+    }
     if (epoch !== this.#latestNavigationEpoch) return;
     if (manual && this.#state.identity)
       await this.flushDraft().catch(() => undefined);
@@ -1156,7 +1269,9 @@ export class PracticeController extends EventTarget {
     }
   }
 
-  private teardownActivePorts(): void {
+  private async teardownActivePorts(): Promise<void> {
+    const bootstrap = this.#predictionBootstrap;
+    this.#predictionBootstrap = null;
     this.#indexer?.cancel();
     this.#navigation?.dispose();
     this.#audio?.dispose();
@@ -1164,6 +1279,8 @@ export class PracticeController extends EventTarget {
     this.#answerGate = null;
     this.#audio = null;
     this.#indexer = null;
+    this.#checkpoints = null;
+    if (bootstrap) await bootstrap.dispose();
   }
 
   private fail(code: string, siteStatus: string, error: unknown): void {
@@ -1182,7 +1299,7 @@ export class PracticeController extends EventTarget {
   }
 }
 
-class RuntimeIndexCheckpoints implements IndexCheckpointPort {
+export class RuntimeIndexCheckpoints implements IndexCheckpointPort {
   readonly #runtime: RuntimeClient;
   readonly #questions = new Map<string, IndexedQuestion>();
   #snapshot: IndexSnapshot | null = null;
@@ -1221,6 +1338,46 @@ class RuntimeIndexCheckpoints implements IndexCheckpointPort {
         question.sitePosition === identity.position,
     );
     return atPosition?.questionId === identity.questionId;
+  }
+
+  hasCompleteEdition(predictionEdition: string, total: number): boolean {
+    return (
+      this.#snapshot?.completeness === "complete" &&
+      this.#snapshot.predictionEdition === predictionEdition &&
+      this.#snapshot.siteTotal === total
+    );
+  }
+
+  async adoptBootstrap(
+    result: PredictionEditionBootstrapResult,
+  ): Promise<void> {
+    if (
+      !isVerifiedQuestionSetEdition(
+        result.edition,
+        result.snapshot.siteTotal,
+      ) ||
+      result.snapshot.predictionEdition !== result.edition ||
+      result.snapshot.completeness !== "complete" ||
+      result.questions.length !== result.snapshot.siteTotal ||
+      result.questions.some(
+        (question, index) =>
+          question.predictionEdition !== result.edition ||
+          question.siteTotal !== result.snapshot.siteTotal ||
+          question.sitePosition !== index + 1 ||
+          question.questionId !== result.snapshot.orderedQuestionIds[index],
+      )
+    ) {
+      throw new Error("index:invalid-bootstrap-result");
+    }
+    this.#questions.clear();
+    this.#snapshot = null;
+    for (const question of result.questions) {
+      this.#questions.set(
+        `${question.predictionEdition}:${question.questionId}`,
+        question,
+      );
+    }
+    await this.saveSnapshot(result.snapshot);
   }
 
   async hydrate(predictionEdition: string): Promise<void> {

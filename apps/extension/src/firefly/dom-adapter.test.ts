@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { verifiedPredictionEdition } from "./dom-adapter";
+import {
+  FireflyDomAdapter,
+  isSequentialQuestionPositionList,
+  isVerifiedQuestionSetEdition,
+  PredictionEditionOverrideState,
+  verifiedPredictionEdition,
+} from "./dom-adapter";
+
+describe("FireflyDomAdapter prediction edition probe guard", () => {
+  it("returns the bootstrap diagnostic while the override is provisional", () => {
+    const loggedOutDocument = {
+      location: { pathname: "/login" },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(loggedOutDocument);
+    adapter.beginProvisionalPredictionEdition();
+
+    expect(adapter.probe()).toEqual({
+      ok: false,
+      diagnostic: {
+        code: "INVALID_QUESTION",
+        detail: "question:prediction-edition-unverified",
+      },
+    });
+  });
+});
 
 describe("verifiedPredictionEdition", () => {
   it("rejects a generic weekly heading and client calendar fallback", () => {
@@ -108,5 +132,86 @@ describe("verifiedPredictionEdition", () => {
         expectedTotal: 192,
       }),
     ).toThrow("question:prediction-edition-unverified");
+  });
+});
+
+describe("Element UI question picker evidence", () => {
+  it("accepts only a complete, ordered 1..N position list", () => {
+    expect(isSequentialQuestionPositionList(["1", " 2 ", "3"])).toBe(true);
+    expect(isSequentialQuestionPositionList(["1", "3"])).toBe(false);
+    expect(isSequentialQuestionPositionList(["1", "2", "2"])).toBe(false);
+    expect(isSequentialQuestionPositionList(["1", "2", "3"], 2)).toBe(false);
+    expect(isSequentialQuestionPositionList([])).toBe(false);
+  });
+
+  it("accepts only a full-fingerprint edition for the matching total", () => {
+    expect(
+      isVerifiedQuestionSetEdition("yc-set-193-0123456789abcdef", 193),
+    ).toBe(true);
+    expect(
+      isVerifiedQuestionSetEdition("yc-set-192-0123456789abcdef", 193),
+    ).toBe(false);
+    expect(isVerifiedQuestionSetEdition("weekly-2026-W29", 193)).toBe(false);
+  });
+});
+
+describe("PredictionEditionOverrideState", () => {
+  it("blocks probing with the bootstrap diagnostic while provisional", () => {
+    const state = new PredictionEditionOverrideState(() => "bootstrap-1");
+
+    expect(state.begin()).toBe("bootstrap-1");
+    expect(state.probeDiagnostic()).toEqual({
+      code: "INVALID_QUESTION",
+      detail: "question:prediction-edition-unverified",
+    });
+    expect(state.resolve(193)).toBe("provisional:bootstrap-1");
+  });
+
+  it("does not let a stale token clear a newer bootstrap", () => {
+    const tokens = ["bootstrap-1", "bootstrap-2"];
+    const state = new PredictionEditionOverrideState(() => {
+      const token = tokens.shift();
+      if (!token) throw new Error("test token exhausted");
+      return token;
+    });
+    const staleToken = state.begin();
+    const currentToken = state.begin();
+
+    expect(state.clear(staleToken)).toBe(false);
+    expect(state.resolve(193)).toBe("provisional:bootstrap-2");
+    expect(state.clear(currentToken)).toBe(true);
+    expect(state.probeDiagnostic()).toBeNull();
+  });
+
+  it("keeps a verified override probeable and immune to provisional invalidation", () => {
+    const state = new PredictionEditionOverrideState(() => "bootstrap-1");
+    const token = state.begin();
+
+    state.adopt("yc-set-193-0123456789abcdef", 193, token);
+
+    expect(state.probeDiagnostic()).toBeNull();
+    expect(state.resolve(193)).toBe("yc-set-193-0123456789abcdef");
+    expect(state.invalidateProvisional(token)).toBe(false);
+    expect(state.resolve(193)).toBe("yc-set-193-0123456789abcdef");
+  });
+
+  it("drops verified evidence when the site total changes", () => {
+    const state = new PredictionEditionOverrideState(() => "bootstrap-1");
+    const token = state.begin();
+    state.adopt("yc-set-193-0123456789abcdef", 193, token);
+
+    expect(state.resolve(192)).toBeNull();
+    expect(state.resolve(192)).toBeNull();
+  });
+
+  it("invalidates only the matching verified edition", () => {
+    const state = new PredictionEditionOverrideState(() => "bootstrap-1");
+    const token = state.begin();
+    state.adopt("yc-set-193-0123456789abcdef", 193, token);
+
+    expect(state.invalidateVerified("yc-set-193-deadbeefdeadbeef")).toBe(false);
+    expect(state.resolve(193)).toBe("yc-set-193-0123456789abcdef");
+    expect(state.invalidateVerified("yc-set-193-0123456789abcdef")).toBe(true);
+    expect(state.resolve(193)).toBeNull();
   });
 });

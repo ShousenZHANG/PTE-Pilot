@@ -58,8 +58,98 @@ function toDiagnostic(error: unknown, capability: string): AdapterDiagnostic {
   };
 }
 
+type PredictionEditionOverride = {
+  token: string;
+  value: string;
+  state: "provisional" | "verified";
+  total: number | null;
+};
+
+export class PredictionEditionOverrideState {
+  readonly #createToken: () => string;
+  #current: PredictionEditionOverride | null = null;
+
+  constructor(createToken: () => string = () => crypto.randomUUID()) {
+    this.#createToken = createToken;
+  }
+
+  begin(): string {
+    const token = this.#createToken();
+    this.#current = {
+      token,
+      value: `provisional:${token}`,
+      state: "provisional",
+      total: null,
+    };
+    return token;
+  }
+
+  probeDiagnostic(): AdapterDiagnostic | null {
+    return this.#current?.state === "provisional"
+      ? {
+          code: "INVALID_QUESTION",
+          detail: "question:prediction-edition-unverified",
+        }
+      : null;
+  }
+
+  resolve(expectedTotal: number): string | null {
+    const current = this.#current;
+    if (!current) return null;
+    if (current.total === null) current.total = expectedTotal;
+    if (current.total !== expectedTotal) {
+      if (current.state === "verified") {
+        this.#current = null;
+        return null;
+      }
+      throw new Error("question:prediction-total-changed");
+    }
+    return current.value;
+  }
+
+  adopt(edition: string, total: number, bootstrapToken: string): void {
+    const current = this.#current;
+    if (current?.state !== "provisional" || current.token !== bootstrapToken)
+      throw new Error("question:prediction-bootstrap-missing");
+    if (current.total !== null && current.total !== total)
+      throw new Error("question:prediction-total-changed");
+    if (!isVerifiedQuestionSetEdition(edition, total))
+      throw new Error("question:prediction-edition-unverified");
+    this.#current = {
+      token: bootstrapToken,
+      value: edition,
+      state: "verified",
+      total,
+    };
+  }
+
+  clear(bootstrapToken: string): boolean {
+    if (this.#current?.token !== bootstrapToken) return false;
+    this.#current = null;
+    return true;
+  }
+
+  invalidateProvisional(bootstrapToken: string): boolean {
+    if (
+      this.#current?.state !== "provisional" ||
+      this.#current.token !== bootstrapToken
+    )
+      return false;
+    this.#current = null;
+    return true;
+  }
+
+  invalidateVerified(edition: string): boolean {
+    if (this.#current?.state !== "verified" || this.#current.value !== edition)
+      return false;
+    this.#current = null;
+    return true;
+  }
+}
+
 export class FireflyDomAdapter {
   readonly #document: Document;
+  readonly #predictionEditionOverride = new PredictionEditionOverrideState();
   #activeRevealBinding: {
     proof: RevealedAnswerProof;
     node: HTMLElement;
@@ -71,6 +161,11 @@ export class FireflyDomAdapter {
   }
 
   probe(): ProbeResult {
+    const provisionalDiagnostic =
+      this.#predictionEditionOverride.probeDiagnostic();
+    if (provisionalDiagnostic)
+      return { ok: false, diagnostic: provisionalDiagnostic };
+
     if (this.#looksLoggedOut()) {
       return {
         ok: false,
@@ -113,7 +208,7 @@ export class FireflyDomAdapter {
       play:
         this.findControls("play").length === 1 ||
         this.visibleAudioElements().length === 1,
-      select: this.questionSelect() !== null,
+      select: this.supportsDirectSelection(),
     };
   }
 
@@ -162,6 +257,41 @@ export class FireflyDomAdapter {
       total: position.total,
       tags: this.readTags(),
     };
+  }
+
+  beginProvisionalPredictionEdition(): string {
+    return this.#predictionEditionOverride.begin();
+  }
+
+  adoptVerifiedPredictionEdition(
+    edition: string,
+    total: number,
+    bootstrapToken: string,
+  ): void {
+    this.#predictionEditionOverride.adopt(edition, total, bootstrapToken);
+  }
+
+  clearPredictionEditionOverride(bootstrapToken: string): void {
+    this.#predictionEditionOverride.clear(bootstrapToken);
+  }
+
+  invalidateProvisionalPredictionEdition(bootstrapToken: string): boolean {
+    return this.#predictionEditionOverride.invalidateProvisional(
+      bootstrapToken,
+    );
+  }
+
+  invalidateVerifiedPredictionEdition(edition: string): boolean {
+    return this.#predictionEditionOverride.invalidateVerified(edition);
+  }
+
+  supportsDirectSelection(): boolean {
+    if (this.questionSelect() !== null) return true;
+    try {
+      return this.customQuestionItems(this.readIdentity().total) !== null;
+    } catch {
+      return false;
+    }
   }
 
   input(): HTMLTextAreaElement {
@@ -328,11 +458,18 @@ export class FireflyDomAdapter {
 
   selectQuestion(position: number): void {
     const select = this.questionSelect();
-    if (!select) throw new Error("select:missing");
-    const option = select.options.item(position - 1);
-    if (!option) throw new Error("select:target-missing");
-    select.value = option.value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    if (select) {
+      const option = select.options.item(position - 1);
+      if (!option) throw new Error("select:target-missing");
+      select.value = option.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    const items = this.customQuestionItems(this.readIdentity().total);
+    const target = items?.[position - 1];
+    if (!target)
+      throw new Error(items ? "select:target-missing" : "select:missing");
+    target.click();
   }
 
   visibleAudioElements(): HTMLAudioElement[] {
@@ -409,6 +546,25 @@ export class FireflyDomAdapter {
     if (semantic.length === 1) return semantic[0] ?? null;
     if (selects.length === 1) return selects[0] ?? null;
     return null;
+  }
+
+  private customQuestionItems(expectedTotal?: number): HTMLElement[] | null {
+    const pickers = Array.from(
+      this.#document.querySelectorAll<HTMLInputElement>("input[readonly]"),
+    ).filter(
+      (input) =>
+        normalizeLabel(input.placeholder) === "选择题号" && isVisible(input),
+    );
+    if (pickers.length !== 1) return null;
+    const items = Array.from(
+      this.#document.querySelectorAll<HTMLElement>(".el-select-dropdown__item"),
+    );
+    return isSequentialQuestionPositionList(
+      items.map((item) => item.textContent ?? ""),
+      expectedTotal,
+    )
+      ? items
+      : null;
   }
 
   private revealNodes(): HTMLElement[] {
@@ -568,12 +724,23 @@ export class FireflyDomAdapter {
           parseQuestionId(option.value),
       )
       .filter((value): value is string => value !== null);
-    return verifiedPredictionEdition({
-      explicitValues,
-      headingTexts,
-      optionQuestionIds,
-      expectedTotal,
-    });
+    try {
+      return verifiedPredictionEdition({
+        explicitValues,
+        headingTexts,
+        optionQuestionIds,
+        expectedTotal,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "question:prediction-edition-unverified"
+      )
+        throw error;
+      const override = this.#predictionEditionOverride.resolve(expectedTotal);
+      if (override === null) throw error;
+      return override;
+    }
   }
 
   private readTags(): string[] {
@@ -652,6 +819,28 @@ export function verifiedPredictionEdition(input: {
     return `yc-set-${ids.length}-${fnv1a64(ids.join("\u0000"))}`;
   }
   throw new Error("question:prediction-edition-unverified");
+}
+
+export function isSequentialQuestionPositionList(
+  labels: readonly string[],
+  expectedTotal?: number,
+): boolean {
+  return (
+    labels.length > 0 &&
+    (expectedTotal === undefined || labels.length === expectedTotal) &&
+    labels.every((label, index) => normalizeLabel(label) === String(index + 1))
+  );
+}
+
+export function isVerifiedQuestionSetEdition(
+  edition: string,
+  total: number,
+): boolean {
+  return (
+    Number.isSafeInteger(total) &&
+    total > 0 &&
+    new RegExp(`^yc-set-${total}-[0-9a-f]{16}$`, "u").test(edition)
+  );
 }
 
 function isGenericPredictionHeading(value: string): boolean {

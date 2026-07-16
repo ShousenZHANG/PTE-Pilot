@@ -1,4 +1,5 @@
 import type { AudioBindingKey } from "@pte-pilot/contracts";
+import { isSupportedFireflyExerciseUrl } from "../firefly/url-policy";
 import {
   type AudioCaptureEvent,
   AudioCaptureEventSchema,
@@ -245,14 +246,7 @@ function isUploadUrl(raw: string): boolean {
 function isTrustedSender(extensionId: string, sender: RuntimeSender): boolean {
   if (sender.id !== extensionId || !sender.url) return false;
   try {
-    const url = new URL(sender.url);
-    const pageSources = url.searchParams.getAll("pageSource");
-    return (
-      url.origin === "https://www.fireflyau.com" &&
-      url.pathname === "/ptehome/exercise" &&
-      pageSources.length === 1 &&
-      pageSources[0] === "yc"
-    );
+    return isSupportedFireflyExerciseUrl(new URL(sender.url));
   } catch {
     return false;
   }

@@ -2,6 +2,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { createShadowRootUi } from "wxt/utils/content-script-ui/shadow-root";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { Cockpit } from "../src/app/Cockpit";
+import { isSupportedFireflyExerciseUrl } from "../src/firefly/url-policy";
 import "../src/app/cockpit.css";
 
 export default defineContentScript({
@@ -10,13 +11,7 @@ export default defineContentScript({
   cssInjectionMode: "ui",
   async main(ctx) {
     const url = new URL(window.location.href);
-    const pageSources = url.searchParams.getAll("pageSource");
-    if (
-      url.pathname !== "/ptehome/exercise" ||
-      pageSources.length !== 1 ||
-      pageSources[0] !== "yc"
-    )
-      return;
+    if (!isSupportedFireflyExerciseUrl(url)) return;
 
     const ui = await createShadowRootUi<Root>(ctx, {
       name: "pte-pilot-cockpit",

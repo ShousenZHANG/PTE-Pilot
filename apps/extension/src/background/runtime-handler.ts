@@ -6,6 +6,7 @@ import {
   type RuntimeResponse,
   RuntimeResponseSchema,
 } from "@pte-pilot/contracts";
+import { isSupportedFireflyExerciseUrl } from "../firefly/url-policy";
 import {
   GatewayHttpError,
   type PtePilotGatewayClient,
@@ -28,15 +29,7 @@ export interface RuntimeHandlerDependencies {
 function isAllowedSender(sender: RuntimeSender, extensionId: string): boolean {
   if (sender.id !== extensionId || !sender.url) return false;
   try {
-    const url = new URL(sender.url);
-    const pageSources = url.searchParams.getAll("pageSource");
-    return (
-      url.protocol === "https:" &&
-      url.hostname === "www.fireflyau.com" &&
-      url.pathname === "/ptehome/exercise" &&
-      pageSources.length === 1 &&
-      pageSources[0] === "yc"
-    );
+    return isSupportedFireflyExerciseUrl(new URL(sender.url));
   } catch {
     return false;
   }
@@ -49,6 +42,35 @@ function failureReason(error: unknown): RuntimeFailureReason {
 }
 
 class InvalidRuntimeRequestError extends Error {}
+
+function predictionEditions(request: RuntimeRequest): readonly string[] {
+  switch (request.action) {
+    case "storage/loadDraft":
+    case "storage/commitAttempt":
+    case "storage/setMarked":
+    case "storage/getRankCandidates":
+    case "storage/loadIndexSnapshot":
+    case "gateway/rank":
+      return [request.predictionEdition];
+    case "storage/saveDraft":
+      return [request.draft.predictionEdition];
+    case "storage/saveSession":
+      return [request.question.predictionEdition];
+    case "storage/saveIndexSnapshot":
+      return [
+        request.snapshot.predictionEdition,
+        ...request.questions.map((question) => question.predictionEdition),
+      ];
+    default:
+      return [];
+  }
+}
+
+function hasProvisionalPredictionEdition(request: RuntimeRequest): boolean {
+  return predictionEditions(request).some((edition) =>
+    edition.startsWith("provisional:"),
+  );
+}
 
 function failure(request: RuntimeRequest, error: unknown): RuntimeResponse {
   return RuntimeFailureSchema.parse({
@@ -71,6 +93,11 @@ export function createRuntimeMessageHandler(
     if (!parsed.success) return undefined;
     const request = parsed.data;
     try {
+      if (hasProvisionalPredictionEdition(request)) {
+        throw new InvalidRuntimeRequestError(
+          "provisional prediction edition cannot cross the runtime boundary",
+        );
+      }
       const response = await execute(request, dependencies);
       return RuntimeResponseSchema.parse(response);
     } catch (error) {

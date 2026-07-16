@@ -48,9 +48,11 @@ export class NavigationCoordinator extends EventTarget {
   async navigate(
     intent: NavigationIntent,
     timeoutMs = 8_000,
+    signal?: AbortSignal,
   ): Promise<NavigationResult> {
     if (this.#activeEpoch !== null)
       throw new Error("navigation:already-active");
+    if (signal?.aborted) throw new Error("navigation:aborted");
     const before = this.#site.readIdentity();
     const targetPosition = expectedPosition(before, intent);
     if (targetPosition < 1 || targetPosition > before.total) {
@@ -65,6 +67,7 @@ export class NavigationCoordinator extends EventTarget {
           detail: { identity: before, epoch, manual: false },
         }),
       );
+      if (signal?.aborted) throw new Error("navigation:aborted");
       if (intent.kind === "select") this.#site.selectQuestion(intent.position);
       else this.#site.click(intent.kind);
 
@@ -89,6 +92,7 @@ export class NavigationCoordinator extends EventTarget {
           );
         },
         timeoutMs,
+        signal,
       );
       if (epoch !== this.#epoch) throw new Error("navigation:stale-epoch");
       this.#lastIdentity = identity;
@@ -163,20 +167,38 @@ function waitForIdentity(
   site: NavigationSitePort,
   predicate: (identity: QuestionIdentity) => boolean,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<QuestionIdentity> {
   return new Promise((resolve, reject) => {
     let finished = false;
     let stableKey: string | null = null;
     let stableSince = 0;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    let stop: () => void = () => undefined;
     const stabilityMs = 120;
+    const cleanup = () => {
+      if (timeout !== null) clearTimeout(timeout);
+      if (poll !== null) clearInterval(poll);
+      timeout = null;
+      poll = null;
+      stop();
+      stop = () => undefined;
+      signal?.removeEventListener("abort", onAbort);
+    };
     const finish = (identity: QuestionIdentity) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timeout);
-      clearInterval(poll);
-      stop();
+      cleanup();
       resolve(identity);
     };
+    const fail = (error: Error) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => fail(new Error("navigation:aborted"));
     const inspect = (identity: QuestionIdentity) => {
       if (!predicate(identity)) {
         stableKey = null;
@@ -192,20 +214,27 @@ function waitForIdentity(
       }
       if (now - stableSince >= stabilityMs) finish(identity);
     };
-    const stop = site.observeQuestionChanges(inspect);
-    const poll = setInterval(() => {
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    stop = site.observeQuestionChanges(inspect);
+    if (finished) {
+      stop();
+      stop = () => undefined;
+      return;
+    }
+    poll = setInterval(() => {
       try {
         inspect(site.readIdentity());
       } catch {
         // DOM can be transient while Firefly swaps question components.
       }
     }, 50);
-    const timeout = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      clearInterval(poll);
-      stop();
-      reject(new Error("navigation:timeout"));
-    }, timeoutMs);
+    timeout = setTimeout(
+      () => fail(new Error("navigation:timeout")),
+      timeoutMs,
+    );
   });
 }

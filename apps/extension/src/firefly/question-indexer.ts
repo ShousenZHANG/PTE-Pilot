@@ -8,6 +8,7 @@ import type { NavigationCoordinator } from "./navigation-coordinator";
 export interface IndexSitePort {
   readIdentity(): QuestionIdentity;
   questionOptions(): QuestionIdentity[] | null;
+  supportsDirectSelection?(): boolean;
 }
 
 export interface IndexCheckpointPort {
@@ -22,6 +23,7 @@ export class QuestionIndexer extends EventTarget {
   readonly #navigation: NavigationCoordinator;
   readonly #checkpoints: IndexCheckpointPort;
   #abortController: AbortController | null = null;
+  #hardAbortController: AbortController | null = null;
   #paused = false;
   #failureReason: string | null = null;
   readonly #resumeWaiters = new Set<() => void>();
@@ -69,78 +71,117 @@ export class QuestionIndexer extends EventTarget {
   ): Promise<IndexSnapshot> {
     if (this.#abortController) throw new Error("index:already-running");
     const abortController = new AbortController();
+    const hardAbortController = new AbortController();
     this.#abortController = abortController;
+    this.#hardAbortController = hardAbortController;
     this.#paused = false;
     this.#failureReason = null;
     try {
-      await waitForPreflight(startAfter, abortController.signal);
-    } catch (error) {
-      this.#failureReason = errorMessage(error);
-      this.#abortController = null;
-      this.#paused = false;
-      this.releaseResumeWaiters();
-      throw error;
-    }
-    const structured = this.#site.questionOptions();
-    if (structured)
-      return this.controlledStructuredIndex(structured, abortController);
-    const origin = this.#site.readIdentity();
-    const found = resumeFound(
-      this.#checkpoints.resumeQuestions?.() ?? [],
-      origin,
-    );
-    found.set(origin.position, origin);
-    const resumedSnapshot = this.#checkpoints.resumeSnapshot?.();
-    let checkpointPosition = validResumeCheckpoint(resumedSnapshot, origin);
-    const checkpoint = (identity: QuestionIdentity) => {
-      checkpointPosition = identity.position;
-    };
-    await this.#checkpoints.saveQuestion(toIndexed(origin));
-    let traversalFailed = false;
-    try {
-      for (const targetPosition of traversalTargets(
-        origin,
-        found,
-        checkpointPosition,
-      )) {
-        const currentPosition = this.#site.readIdentity().position;
-        await this.walkTo(
-          targetPosition,
-          currentPosition < targetPosition ? "next" : "previous",
-          found,
-          abortController.signal,
-          checkpoint,
-        );
-      }
-    } catch (error) {
-      traversalFailed = true;
-      this.#failureReason = errorMessage(error);
-    } finally {
-      this.#abortController = null;
-      this.#paused = false;
-      this.releaseResumeWaiters();
       try {
-        await this.restoreOrigin(origin, found);
+        await waitForPreflight(startAfter, abortController.signal);
+      } catch (error) {
+        this.#failureReason = errorMessage(error);
+        throw error;
+      }
+      const structured = this.#site.questionOptions();
+      if (structured)
+        return await this.controlledStructuredIndex(
+          structured,
+          abortController,
+        );
+      const origin = this.#site.readIdentity();
+      const found = resumeFound(
+        this.#checkpoints.resumeQuestions?.() ?? [],
+        origin,
+      );
+      found.set(origin.position, origin);
+      const resumedSnapshot = this.#checkpoints.resumeSnapshot?.();
+      let checkpointPosition = validResumeCheckpoint(resumedSnapshot, origin);
+      const checkpoint = (identity: QuestionIdentity) => {
+        checkpointPosition = identity.position;
+      };
+      await this.#checkpoints.saveQuestion(toIndexed(origin));
+      let traversalFailed = false;
+      try {
+        if (this.#site.supportsDirectSelection?.()) {
+          const missingPositions = Array.from(
+            { length: origin.total },
+            (_, index) => index + 1,
+          ).filter((position) => !found.has(position));
+          for (const targetPosition of missingPositions) {
+            await this.waitUntilResumed(abortController.signal);
+            if (abortController.signal.aborted) break;
+            const result = await this.#navigation.navigate(
+              {
+                kind: "select",
+                position: targetPosition,
+              },
+              8_000,
+              abortController.signal,
+            );
+            found.set(result.identity.position, result.identity);
+            checkpoint(result.identity);
+            await this.#checkpoints.saveQuestion(toIndexed(result.identity));
+            await this.#checkpoints.saveSnapshot(
+              toSnapshot(
+                [...found.values()].sort(byPosition),
+                "partial",
+                result.identity.position,
+              ),
+            );
+          }
+        } else {
+          for (const targetPosition of traversalTargets(
+            origin,
+            found,
+            checkpointPosition,
+          )) {
+            const currentPosition = this.#site.readIdentity().position;
+            await this.walkTo(
+              targetPosition,
+              currentPosition < targetPosition ? "next" : "previous",
+              found,
+              abortController.signal,
+              checkpoint,
+            );
+          }
+        }
       } catch (error) {
         traversalFailed = true;
-        this.#failureReason ??= errorMessage(error);
+        this.#failureReason = errorMessage(error);
+      } finally {
+        if (!hardAbortController.signal.aborted) {
+          try {
+            await this.restoreOrigin(origin, found, hardAbortController.signal);
+          } catch (error) {
+            traversalFailed = true;
+            this.#failureReason ??= errorMessage(error);
+          }
+        }
       }
-    }
 
-    const identities = [...found.values()].sort(byPosition);
-    const restored = this.#site.readIdentity();
-    const complete =
-      !traversalFailed &&
-      !abortController.signal.aborted &&
-      restored.questionId === origin.questionId &&
-      hasContiguousPositions(identities, origin.total);
-    const snapshot = toSnapshot(
-      identities,
-      complete ? "complete" : "partial",
-      checkpointPosition,
-    );
-    await this.#checkpoints.saveSnapshot(snapshot);
-    return snapshot;
+      const identities = [...found.values()].sort(byPosition);
+      const restored = this.#site.readIdentity();
+      const complete =
+        !traversalFailed &&
+        !abortController.signal.aborted &&
+        restored.questionId === origin.questionId &&
+        hasContiguousPositions(identities, origin.total);
+      const snapshot = toSnapshot(
+        identities,
+        complete ? "complete" : "partial",
+        checkpointPosition,
+      );
+      await this.#checkpoints.saveSnapshot(snapshot);
+      return snapshot;
+    } finally {
+      if (this.#abortController === abortController)
+        this.#abortController = null;
+      if (this.#hardAbortController === hardAbortController)
+        this.#hardAbortController = null;
+      this.#paused = false;
+      this.releaseResumeWaiters();
+    }
   }
 
   pause(): boolean {
@@ -166,6 +207,19 @@ export class QuestionIndexer extends EventTarget {
     return true;
   }
 
+  hardCancel(): boolean {
+    if (!this.#abortController && !this.#hardAbortController) return false;
+    this.#hardAbortController?.abort();
+    this.#abortController?.abort();
+    this.#paused = false;
+    this.releaseResumeWaiters();
+    return true;
+  }
+
+  dispose(): void {
+    this.hardCancel();
+  }
+
   get failureReason(): string | null {
     return this.#failureReason;
   }
@@ -177,55 +231,49 @@ export class QuestionIndexer extends EventTarget {
     const collected: QuestionIdentity[] = [];
     let failed = false;
     try {
-      try {
-        for (const question of structured) {
-          await this.waitUntilResumed(abortController.signal);
-          if (abortController.signal.aborted) break;
-          await this.#checkpoints.saveQuestion(toIndexed(question));
-          collected.push(question);
-          await this.#checkpoints.saveSnapshot(
-            toSnapshot(collected, "partial", question.position),
-          );
-        }
-      } catch (error) {
-        failed = true;
-        this.#failureReason = errorMessage(error);
-      }
-      if (collected.length === 0) {
-        if (!abortController.signal.aborted)
-          throw new Error(this.#failureReason ?? "index:no-checkpoint");
-        const current = this.#site.readIdentity();
-        if (!structured.some((question) => sameIdentity(question, current)))
-          throw new Error("index:cancel-identity-mismatch");
-        await this.#checkpoints.saveQuestion(toIndexed(current));
-        collected.push(current);
+      for (const question of structured) {
+        await this.waitUntilResumed(abortController.signal);
+        if (abortController.signal.aborted) break;
+        await this.#checkpoints.saveQuestion(toIndexed(question));
+        collected.push(question);
         await this.#checkpoints.saveSnapshot(
-          toSnapshot(collected, "partial", current.position),
+          toSnapshot(collected, "partial", question.position),
         );
       }
-      const complete =
-        !failed &&
-        !abortController.signal.aborted &&
-        hasContiguousPositions(collected, structured.length);
-      let snapshot = toSnapshot(
-        collected,
-        complete ? "complete" : "partial",
-        collected.at(-1)?.position,
-      );
-      await this.#checkpoints.saveSnapshot(snapshot);
-      if (
-        abortController.signal.aborted &&
-        snapshot.completeness === "complete"
-      ) {
-        snapshot = { ...snapshot, completeness: "partial" };
-        await this.#checkpoints.saveSnapshot(snapshot);
-      }
-      return snapshot;
-    } finally {
-      this.#abortController = null;
-      this.#paused = false;
-      this.releaseResumeWaiters();
+    } catch (error) {
+      failed = true;
+      this.#failureReason = errorMessage(error);
     }
+    if (collected.length === 0) {
+      if (!abortController.signal.aborted)
+        throw new Error(this.#failureReason ?? "index:no-checkpoint");
+      const current = this.#site.readIdentity();
+      if (!structured.some((question) => sameIdentity(question, current)))
+        throw new Error("index:cancel-identity-mismatch");
+      await this.#checkpoints.saveQuestion(toIndexed(current));
+      collected.push(current);
+      await this.#checkpoints.saveSnapshot(
+        toSnapshot(collected, "partial", current.position),
+      );
+    }
+    const complete =
+      !failed &&
+      !abortController.signal.aborted &&
+      hasContiguousPositions(collected, structured.length);
+    let snapshot = toSnapshot(
+      collected,
+      complete ? "complete" : "partial",
+      collected.at(-1)?.position,
+    );
+    await this.#checkpoints.saveSnapshot(snapshot);
+    if (
+      abortController.signal.aborted &&
+      snapshot.completeness === "complete"
+    ) {
+      snapshot = { ...snapshot, completeness: "partial" };
+      await this.#checkpoints.saveSnapshot(snapshot);
+    }
+    return snapshot;
   }
 
   private async walkTo(
@@ -238,7 +286,7 @@ export class QuestionIndexer extends EventTarget {
     while (this.#site.readIdentity().position !== targetPosition) {
       await this.waitUntilResumed(signal);
       if (signal.aborted) return;
-      const result = await this.#navigation.navigate({ kind });
+      const result = await this.#navigation.navigate({ kind }, 8_000, signal);
       found.set(result.identity.position, result.identity);
       onCheckpoint(result.identity);
       await this.#checkpoints.saveQuestion(toIndexed(result.identity));
@@ -255,11 +303,35 @@ export class QuestionIndexer extends EventTarget {
   private async restoreOrigin(
     origin: QuestionIdentity,
     found: Map<number, QuestionIdentity>,
+    signal: AbortSignal,
   ): Promise<void> {
     let current = this.#site.readIdentity();
+    if (
+      current.position !== origin.position &&
+      this.#site.supportsDirectSelection?.()
+    ) {
+      const result = await this.#navigation.navigate(
+        {
+          kind: "select",
+          position: origin.position,
+          expectedQuestionId: origin.questionId,
+        },
+        8_000,
+        signal,
+      );
+      current = this.#site.readIdentity();
+      if (
+        !sameIdentity(result.identity, current) ||
+        !sameIdentity(current, origin)
+      )
+        throw new Error("index:restore-mismatch");
+      found.set(current.position, current);
+      await this.#checkpoints.saveQuestion(toIndexed(current));
+      return;
+    }
     while (current.position !== origin.position) {
       const kind = current.position < origin.position ? "next" : "previous";
-      const result = await this.#navigation.navigate({ kind });
+      const result = await this.#navigation.navigate({ kind }, 8_000, signal);
       current = result.identity;
       found.set(current.position, current);
       await this.#checkpoints.saveQuestion(toIndexed(current));
