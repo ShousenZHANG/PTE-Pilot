@@ -1,0 +1,28 @@
+{
+  "name": "pte-pilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24.14.0 <25",
+    "pnpm": ">=11.7.0 <12"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "test": "vitest run",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "e2e": "pnpm test:e2e",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "biome check .",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "24.13.3",
+    "@biomejs/biome": "2.5.4",
+    "fake-indexeddb": "6.2.5",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@pte-pilot/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24.14.0 <25",
+    "pnpm": ">=11.7.0 <12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "pair:create": "node dist/cli/create-pairing-code.js"
+  },
+  "dependencies": {
+    "@pte-pilot/contracts": "workspace:*",
+    "better-sqlite3": "12.11.1",
+    "fastify": "5.10.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.13.3",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}

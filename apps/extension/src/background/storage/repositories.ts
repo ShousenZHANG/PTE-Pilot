@@ -1,0 +1,595 @@
+import {
+  type AttemptEvent,
+  AttemptEventSchema,
+  type BatchUpsertRequest,
+  BatchUpsertRequestSchema,
+  type BatchUpsertResponse,
+  BatchUpsertResponseSchema,
+  type CandidateFact,
+  type DraftCheckpoint,
+  DraftCheckpointSchema,
+  type IndexedQuestion,
+  IndexedQuestionSchema,
+  type IndexSnapshot,
+  IndexSnapshotSchema,
+  type QuestionRef,
+  QuestionRefSchema,
+  type RankCandidate,
+  type RestoredSession,
+  type UserSettings,
+  UserSettingsSchema,
+  type WordStatSummary,
+} from "@pte-pilot/contracts";
+import type {
+  OutboxRecord,
+  PtePilotDb,
+  QuestionProgressRecord,
+  SessionRecord,
+  WordStatRecord,
+} from "./db";
+
+const HOUR_MS = 60 * 60 * 1_000;
+const LEASE_MS = 30_000;
+const MAX_BACKOFF_MS = 60_000;
+
+const progressKey = (
+  predictionEdition: string,
+  questionId: string,
+): readonly [string, string] => [predictionEdition, questionId];
+
+const wordKey = (error: AttemptEvent["errors"][number]): string =>
+  [
+    error.type,
+    error.expected.toLocaleLowerCase("en-AU"),
+    error.actual.toLocaleLowerCase("en-AU"),
+  ].join("\u0000");
+
+function nextDueAt(attempt: AttemptEvent): string {
+  const delay =
+    attempt.accuracy === 1
+      ? 24 * HOUR_MS
+      : attempt.accuracy >= 0.8
+        ? 6 * HOUR_MS
+        : 30 * 60 * 1_000;
+  return new Date(Date.parse(attempt.completedAt) + delay).toISOString();
+}
+
+function requireTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new Error("invalid timestamp");
+  return timestamp;
+}
+
+function retryRecord(row: OutboxRecord, nowMs: number): OutboxRecord {
+  const retryCount = row.retryCount + 1;
+  const delay = Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** retryCount);
+  return {
+    ...row,
+    batchId: null,
+    status: "pending",
+    retryCount,
+    nextAttemptAt: new Date(nowMs + delay).toISOString(),
+    leaseExpiresAt: null,
+  };
+}
+
+export class CockpitRepositories {
+  constructor(
+    private readonly db: PtePilotDb,
+    private readonly clock: () => number = Date.now,
+  ) {}
+
+  async loadDraft(
+    predictionEdition: string,
+    questionId: string,
+  ): Promise<DraftCheckpoint | null> {
+    return (
+      (await this.db.drafts.get(progressKey(predictionEdition, questionId))) ??
+      null
+    );
+  }
+
+  async saveDraft(input: DraftCheckpoint): Promise<void> {
+    const draft = DraftCheckpointSchema.parse(input);
+    await this.db.transaction("rw", this.db.drafts, async () => {
+      const key = progressKey(draft.predictionEdition, draft.questionId);
+      const current = await this.db.drafts.get(key);
+      if (!current || draft.revision > current.revision) {
+        await this.db.drafts.put(draft);
+      }
+    });
+  }
+
+  async saveSession(
+    input: QuestionRef,
+    updatedAt = new Date(this.clock()).toISOString(),
+  ): Promise<void> {
+    const question = QuestionRefSchema.parse(input);
+    requireTimestamp(updatedAt);
+    const session: SessionRecord = { id: "current", ...question, updatedAt };
+    await this.db.sessions.put(session);
+  }
+
+  async restoreSession(): Promise<RestoredSession> {
+    const session = await this.db.sessions.get("current");
+    if (!session) return { question: null, draft: null };
+    const question = QuestionRefSchema.parse({
+      questionId: session.questionId,
+      predictionEdition: session.predictionEdition,
+      position: session.position,
+      total: session.total,
+    });
+    return {
+      question,
+      draft: await this.loadDraft(
+        session.predictionEdition,
+        session.questionId,
+      ),
+    };
+  }
+
+  async commitAttempt(
+    predictionEdition: string,
+    input: AttemptEvent,
+  ): Promise<void> {
+    const attempt = AttemptEventSchema.parse(input);
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.attempts,
+        this.db.outbox,
+        this.db.wordStats,
+        this.db.questionProgress,
+        this.db.meta,
+        this.db.sessions,
+      ],
+      async () => {
+        const session = await this.db.sessions.get("current");
+        if (
+          session?.predictionEdition !== predictionEdition ||
+          session.questionId !== attempt.questionId
+        ) {
+          throw new Error("attempt does not match verified current session");
+        }
+        if (await this.db.attempts.get(attempt.attemptId)) return;
+
+        await this.db.attempts.add(attempt);
+        const key = progressKey(predictionEdition, attempt.questionId);
+        const current = await this.db.questionProgress.get(key);
+        const progress: QuestionProgressRecord = {
+          predictionEdition,
+          questionId: attempt.questionId,
+          attemptCount: (current?.attemptCount ?? 0) + 1,
+          errorCount: (current?.errorCount ?? 0) + attempt.errors.length,
+          lastAccuracy: attempt.accuracy,
+          lastAttemptAt: attempt.completedAt,
+          dueAt: nextDueAt(attempt),
+          marked: current?.marked ?? false,
+        };
+        await this.db.questionProgress.put(progress);
+
+        for (const error of attempt.errors) {
+          const key = wordKey(error);
+          const previous = await this.db.wordStats.get(key);
+          const word: WordStatRecord = {
+            key,
+            expected: error.expected,
+            actual: error.actual,
+            type: error.type,
+            occurrences: (previous?.occurrences ?? 0) + 1,
+            lastSeenAt: attempt.completedAt,
+          };
+          await this.db.wordStats.put(word);
+        }
+
+        await this.db.outbox.add({
+          attemptId: attempt.attemptId,
+          batchId: null,
+          status: "pending",
+          retryCount: 0,
+          nextAttemptAt: attempt.completedAt,
+          leaseExpiresAt: null,
+        });
+        await this.incrementLearnerStateVersion();
+      },
+    );
+  }
+
+  async setMarked(
+    predictionEdition: string,
+    questionId: string,
+    marked: boolean,
+  ): Promise<void> {
+    await this.db.transaction(
+      "rw",
+      [this.db.questionProgress, this.db.meta],
+      async () => {
+        const key = progressKey(predictionEdition, questionId);
+        const current = await this.db.questionProgress.get(key);
+        if (current?.marked === marked) return;
+        await this.db.questionProgress.put({
+          predictionEdition,
+          questionId,
+          attemptCount: current?.attemptCount ?? 0,
+          errorCount: current?.errorCount ?? 0,
+          lastAccuracy: current?.lastAccuracy ?? null,
+          lastAttemptAt: current?.lastAttemptAt ?? null,
+          dueAt: current?.dueAt ?? null,
+          marked,
+        });
+        await this.incrementLearnerStateVersion();
+      },
+    );
+  }
+
+  async listCandidateFacts(
+    predictionEdition: string,
+  ): Promise<CandidateFact[]> {
+    const rows = await this.db.questionProgress
+      .where("predictionEdition")
+      .equals(predictionEdition)
+      .toArray();
+    return rows
+      .sort((left, right) =>
+        left.questionId.localeCompare(right.questionId, "en"),
+      )
+      .map((row) => ({
+        questionId: row.questionId,
+        dueAt: row.dueAt,
+        attemptCount: row.attemptCount,
+        errorCount: row.errorCount,
+        lastAccuracy: row.lastAccuracy,
+        lastAttemptAt: row.lastAttemptAt,
+        marked: row.marked,
+      }));
+  }
+
+  async getRankCandidates(
+    predictionEdition: string,
+    requestedQuestionIds: readonly string[],
+  ): Promise<{ learnerStateVersion: number; candidates: RankCandidate[] }> {
+    const questionIds = [...new Set(requestedQuestionIds)];
+    if (questionIds.length === 0 || questionIds.length > 500) {
+      throw new Error("rank candidate count must be between 1 and 500");
+    }
+    return this.db.transaction(
+      "r",
+      [this.db.questionProgress, this.db.meta],
+      async () => {
+        const rows = await this.db.questionProgress.bulkGet(
+          questionIds.map((questionId) =>
+            progressKey(predictionEdition, questionId),
+          ),
+        );
+        const now = this.clock();
+        const candidates = questionIds.map((questionId, index) => {
+          const row = rows[index];
+          const dueScore = !row?.dueAt
+            ? 1
+            : Math.min(
+                1,
+                Math.max(
+                  0,
+                  (now - Date.parse(row.dueAt)) / (24 * HOUR_MS) + 0.5,
+                ),
+              );
+          return {
+            questionId,
+            dueScore,
+            weaknessScore: row
+              ? Math.min(1, row.errorCount / Math.max(1, row.attemptCount * 3))
+              : 0,
+            noveltyScore: row ? 0 : 1,
+            marked: row?.marked ?? false,
+            attemptCount: row?.attemptCount ?? 0,
+            lastAttemptAt: row?.lastAttemptAt ?? null,
+          } satisfies RankCandidate;
+        });
+        return {
+          learnerStateVersion:
+            (await this.db.meta.get("learner-state-version"))?.numberValue ?? 0,
+          candidates,
+        };
+      },
+    );
+  }
+
+  async leaseOutbox(
+    batchId: string,
+    limit: number,
+    now: string,
+  ): Promise<BatchUpsertRequest | null> {
+    const nowMs = requireTimestamp(now);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("outbox lease limit must be between 1 and 100");
+    }
+    return this.db.transaction(
+      "rw",
+      [this.db.outbox, this.db.attempts],
+      async () => {
+        const expired = (
+          await this.db.outbox.where("status").equals("inflight").toArray()
+        ).filter(
+          (row) =>
+            row.leaseExpiresAt !== null &&
+            requireTimestamp(row.leaseExpiresAt) <= nowMs,
+        );
+        for (const row of expired) {
+          await this.db.outbox.put({
+            ...retryRecord(row, nowMs),
+            nextAttemptAt: now,
+          });
+        }
+
+        const rows = (
+          await this.db.outbox.where("status").equals("pending").toArray()
+        )
+          .filter((row) => requireTimestamp(row.nextAttemptAt) <= nowMs)
+          .sort(
+            (left, right) =>
+              left.nextAttemptAt.localeCompare(right.nextAttemptAt) ||
+              left.attemptId.localeCompare(right.attemptId, "en"),
+          )
+          .slice(0, limit);
+        if (rows.length === 0) return null;
+
+        const leaseExpiresAt = new Date(nowMs + LEASE_MS).toISOString();
+        for (const row of rows) {
+          await this.db.outbox.put({
+            ...row,
+            status: "inflight",
+            batchId,
+            leaseExpiresAt,
+          });
+        }
+
+        const events = await this.db.attempts.bulkGet(
+          rows.map((row) => row.attemptId),
+        );
+        if (events.some((event) => event === undefined)) {
+          throw new Error("outbox references missing attempt");
+        }
+        return BatchUpsertRequestSchema.parse({
+          batchId,
+          events: events.map((event) => AttemptEventSchema.parse(event)),
+        });
+      },
+    );
+  }
+
+  async ackOutbox(
+    input: BatchUpsertResponse,
+    now = new Date(this.clock()).toISOString(),
+  ): Promise<void> {
+    const response = BatchUpsertResponseSchema.parse(input);
+    const nowMs = requireTimestamp(now);
+    await this.db.transaction(
+      "rw",
+      [this.db.attempts, this.db.outbox, this.db.meta],
+      async () => {
+        const rows = await this.db.outbox
+          .where("batchId")
+          .equals(response.batchId)
+          .toArray();
+        if (rows.length === 0) return;
+        const acknowledged = new Set(response.ackedAttemptIds);
+        const currentProjection = (
+          await this.db.meta.get("projection-instance-id")
+        )?.stringValue;
+        if (
+          currentProjection !== undefined &&
+          currentProjection !== response.projectionInstanceId
+        ) {
+          const attempts = await this.db.attempts.toArray();
+          await this.db.outbox.clear();
+          const replay = attempts
+            .filter((attempt) => !acknowledged.has(attempt.attemptId))
+            .map((attempt) => ({
+              attemptId: attempt.attemptId,
+              batchId: null,
+              status: "pending" as const,
+              retryCount: 0,
+              nextAttemptAt: now,
+              leaseExpiresAt: null,
+            }));
+          if (replay.length > 0) await this.db.outbox.bulkPut(replay);
+          await this.db.meta.bulkPut([
+            {
+              id: "projection-instance-id",
+              stringValue: response.projectionInstanceId,
+            },
+            {
+              id: "projection-version",
+              numberValue: response.projectionVersion,
+            },
+          ]);
+          return;
+        }
+        for (const row of rows) {
+          if (acknowledged.has(row.attemptId)) {
+            await this.db.outbox.delete(row.attemptId);
+          } else {
+            await this.db.outbox.put(retryRecord(row, nowMs));
+          }
+        }
+        await this.db.meta.bulkPut([
+          {
+            id: "projection-instance-id",
+            stringValue: response.projectionInstanceId,
+          },
+          { id: "projection-version", numberValue: response.projectionVersion },
+        ]);
+      },
+    );
+  }
+
+  async releaseOutbox(
+    batchId: string,
+    now = new Date(this.clock()).toISOString(),
+  ): Promise<void> {
+    const nowMs = requireTimestamp(now);
+    await this.db.transaction("rw", this.db.outbox, async () => {
+      const rows = await this.db.outbox
+        .where("batchId")
+        .equals(batchId)
+        .toArray();
+      for (const row of rows) {
+        await this.db.outbox.put(retryRecord(row, nowMs));
+      }
+    });
+  }
+
+  countOutbox(): Promise<number> {
+    return this.db.outbox.count();
+  }
+
+  async nextOutboxWakeAt(): Promise<string | null> {
+    const rows = await this.db.outbox.toArray();
+    let next: { timestamp: number; value: string } | null = null;
+    for (const row of rows) {
+      const value =
+        row.status === "pending" ? row.nextAttemptAt : row.leaseExpiresAt;
+      if (value === null) continue;
+      const timestamp = requireTimestamp(value);
+      if (!next || timestamp < next.timestamp) next = { timestamp, value };
+    }
+    return next?.value ?? null;
+  }
+
+  async requeueAllAttemptsForProjection(
+    projectionInstanceId: string,
+    now = new Date(this.clock()).toISOString(),
+  ): Promise<void> {
+    requireTimestamp(now);
+    await this.db.transaction(
+      "rw",
+      [this.db.attempts, this.db.outbox, this.db.meta],
+      async () => {
+        const current = (await this.db.meta.get("projection-instance-id"))
+          ?.stringValue;
+        if (current === projectionInstanceId) return;
+        const attempts = await this.db.attempts.toArray();
+        await this.db.outbox.bulkPut(
+          attempts.map((attempt) => ({
+            attemptId: attempt.attemptId,
+            batchId: null,
+            status: "pending" as const,
+            retryCount: 0,
+            nextAttemptAt: now,
+            leaseExpiresAt: null,
+          })),
+        );
+        await this.db.meta.bulkPut([
+          { id: "projection-instance-id", stringValue: projectionInstanceId },
+          { id: "projection-version", numberValue: 0 },
+        ]);
+      },
+    );
+  }
+
+  rebuildOutboxForProjection(
+    projectionInstanceId: string,
+    now?: string,
+  ): Promise<void> {
+    return this.requeueAllAttemptsForProjection(projectionInstanceId, now);
+  }
+
+  async loadIndexSnapshot(
+    predictionEdition: string,
+  ): Promise<{ snapshot: IndexSnapshot | null; questions: IndexedQuestion[] }> {
+    const snapshot = (await this.db.snapshots.get(predictionEdition)) ?? null;
+    const allowed = new Set(snapshot?.orderedQuestionIds ?? []);
+    return {
+      snapshot,
+      questions: (
+        await this.db.questions
+          .where("predictionEdition")
+          .equals(predictionEdition)
+          .sortBy("sitePosition")
+      ).filter((question) => allowed.has(question.questionId)),
+    };
+  }
+
+  async saveIndexSnapshot(
+    inputSnapshot: IndexSnapshot,
+    inputQuestions: readonly IndexedQuestion[],
+  ): Promise<void> {
+    const snapshot = IndexSnapshotSchema.parse(inputSnapshot);
+    const questions = inputQuestions.map((question) =>
+      IndexedQuestionSchema.parse(question),
+    );
+    if (
+      questions.some(
+        (question) =>
+          question.predictionEdition !== snapshot.predictionEdition ||
+          question.siteTotal !== snapshot.siteTotal ||
+          !snapshot.orderedQuestionIds.includes(question.questionId),
+      )
+    ) {
+      throw new Error("index write does not match snapshot");
+    }
+    if (snapshot.completeness === "complete") {
+      const sortedQuestions = [...questions].sort(
+        (left, right) => left.sitePosition - right.sitePosition,
+      );
+      const ordered = sortedQuestions.map((question) => question.questionId);
+      const expectedPositions = sortedQuestions.every(
+        (question, index) => question.sitePosition === index + 1,
+      );
+      if (
+        questions.length !== snapshot.siteTotal ||
+        !expectedPositions ||
+        ordered.some(
+          (questionId, index) =>
+            questionId !== snapshot.orderedQuestionIds[index],
+        )
+      ) {
+        throw new Error("complete index must cover ordered positions 1..N");
+      }
+    }
+
+    await this.db.transaction(
+      "rw",
+      [this.db.snapshots, this.db.questions],
+      async () => {
+        await this.db.questions
+          .where("predictionEdition")
+          .equals(snapshot.predictionEdition)
+          .delete();
+        await this.db.questions.bulkPut(questions);
+        await this.db.snapshots.put(snapshot);
+      },
+    );
+  }
+
+  async loadSettings(): Promise<UserSettings | null> {
+    const settings = await this.db.settings.get("current");
+    return settings ? UserSettingsSchema.parse(settings) : null;
+  }
+
+  async saveSettings(input: UserSettings): Promise<void> {
+    await this.db.settings.put(UserSettingsSchema.parse(input));
+  }
+
+  async listWordStats(limit: number): Promise<WordStatSummary[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("word stat limit must be between 1 and 500");
+    }
+    const words = await this.db.wordStats.toArray();
+    return words
+      .sort(
+        (left, right) =>
+          right.lastSeenAt.localeCompare(left.lastSeenAt) ||
+          left.key.localeCompare(right.key, "en"),
+      )
+      .slice(0, limit);
+  }
+
+  private async incrementLearnerStateVersion(): Promise<void> {
+    const current = await this.db.meta.get("learner-state-version");
+    await this.db.meta.put({
+      id: "learner-state-version",
+      numberValue: (current?.numberValue ?? 0) + 1,
+    });
+  }
+}

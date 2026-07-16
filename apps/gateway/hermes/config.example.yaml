@@ -1,0 +1,4 @@
+platform_toolsets:
+  api_server:
+    - memory
+    - no_mcp
