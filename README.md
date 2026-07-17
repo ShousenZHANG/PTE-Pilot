@@ -94,11 +94,9 @@ Alt+P 听音频 → 打字 → Enter 提交 → 查看词级差异 → Enter 下
 扩展只需要：
 
 - `storage`：本地设置和学习数据。
-- `webRequest`：验证当前播放触发的音频响应。
-- `fireflyau.com`：读取并驱动当前练习页面。
-- `upload.fireflyau.com`：识别萤火虫音频响应。
+- `fireflyau.com`：读取并驱动当前练习页面（音频直接由页面自身的播放元素播放）。
 
-不申请 Cookie、下载、调试器、全部标签页或全部网站权限。
+不申请 Cookie、下载、调试器、webRequest、全部标签页或全部网站权限。
 
 ## 验证
 
@@ -116,4 +114,6 @@ pnpm test:e2e
 pnpm verify
 ```
 
-更多安装、使用和排障信息见 [PTE_PILOT_COMPLETE_GUIDE.md](./PTE_PILOT_COMPLETE_GUIDE.md)。
+## 协议
+
+[MIT](./LICENSE)。使用者需自行遵守萤火虫服务条款与个人订阅范围；本扩展不破解权限、不下载音频、不导出题库。

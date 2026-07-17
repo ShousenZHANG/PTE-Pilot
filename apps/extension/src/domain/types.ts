@@ -12,24 +12,6 @@ export type PracticePhase =
   | "DESYNC"
   | "SITE_CHANGED";
 
-export type AudioState =
-  | "EMPTY"
-  | "READY"
-  | "BUFFERING"
-  | "PLAYING"
-  | "PAUSED"
-  | "ENDED"
-  | "AUDIO_ERROR";
-
-export type IndexState =
-  | "IDLE"
-  | "DISCOVERING"
-  | "INDEXING"
-  | "COMPLETE"
-  | "PARTIAL"
-  | "PAUSED"
-  | "FAILED";
-
 export interface QuestionIdentity {
   predictionEdition: string;
   questionId: string;
@@ -93,17 +75,6 @@ export interface WordError {
     | "substitution"
     | "order"
     | "word_form";
-}
-
-export interface AttemptRecord {
-  attemptId: string;
-  predictionEdition: string;
-  questionId: string;
-  accuracy: number;
-  durationMs: number;
-  replayCount: number;
-  errors: WordError[];
-  completedAt: string;
 }
 
 export interface IndexedQuestion {
