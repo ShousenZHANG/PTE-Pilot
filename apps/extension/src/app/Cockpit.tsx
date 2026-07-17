@@ -80,16 +80,8 @@ const INITIAL_STATE: CockpitViewState = {
   fault: null,
 };
 
-const REDUCED_MOTION =
-  typeof matchMedia === "function" &&
-  matchMedia("(prefers-reduced-motion: reduce)").matches;
-
 export function Cockpit(): React.JSX.Element | null {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const typeFxRef = useRef<HTMLDivElement>(null);
-  const typeMirrorRef = useRef<HTMLDivElement>(null);
-  const spritePoolRef = useRef<HTMLSpanElement[]>([]);
-  const spriteCursorRef = useRef(0);
   const audioBoxRef = useRef<HTMLDivElement>(null);
   const audioFillRef = useRef<HTMLElement>(null);
   const audioTimeRef = useRef<HTMLSpanElement>(null);
@@ -621,8 +613,6 @@ export function Cockpit(): React.JSX.Element | null {
 
         <label className="answer-shell">
           <span className="sr-only">输入听到的完整句子</span>
-          <div className="type-mirror" ref={typeMirrorRef} aria-hidden="true" />
-          <div className="type-fx" ref={typeFxRef} aria-hidden="true" />
           <textarea
             ref={textareaRef}
             data-testid="answer-input"
@@ -641,18 +631,6 @@ export function Cockpit(): React.JSX.Element | null {
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
-              if (state.mode === "practice" && !REDUCED_MOTION) {
-                const native = event.nativeEvent as InputEvent;
-                spawnCharSpark(
-                  event.currentTarget,
-                  typeMirrorRef.current,
-                  typeFxRef.current,
-                  spritePoolRef.current,
-                  spriteCursorRef,
-                  native.inputType ?? "",
-                  native.data ?? null,
-                );
-              }
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
               saveTimerRef.current = setTimeout(
                 () => void controllerRef.current?.flushDraft(),
@@ -1412,61 +1390,12 @@ function updateWordCount(
   const next = `Total Word Count: ${count}`;
   if (output.value === next) return;
   output.value = next;
-  output.dataset.pop = output.dataset.pop === "a" ? "b" : "a";
 }
 
 function formatAudioClock(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   const minutes = String(Math.floor(whole / 60)).padStart(2, "0");
   return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
-}
-
-const SPARK_POOL_SIZE = 10;
-
-/*
- * Per-character typing effect. A hidden mirror replicates the textarea's
- * metrics to find the caret position of the character that just landed,
- * then a pooled sprite replays a transform/opacity-only animation there.
- * The measurement is one small offline layout; the animation itself runs
- * entirely on the compositor, so typing latency is untouched.
- */
-function spawnCharSpark(
-  textarea: HTMLTextAreaElement,
-  mirror: HTMLDivElement | null,
-  fx: HTMLDivElement | null,
-  pool: HTMLSpanElement[],
-  cursor: { current: number },
-  inputType: string,
-  data: string | null,
-): void {
-  if (!mirror || !fx || !inputType.startsWith("insert")) return;
-  const char = data && data.length > 0 ? data[data.length - 1] : null;
-  if (!char || char === " " || char === "\n") return;
-  const caret = textarea.selectionStart ?? textarea.value.length;
-  mirror.style.width = `${textarea.clientWidth}px`;
-  mirror.textContent = textarea.value.slice(0, Math.max(0, caret - 1));
-  const marker = document.createElement("span");
-  marker.textContent = char;
-  mirror.append(marker);
-  const x = marker.offsetLeft;
-  const y = marker.offsetTop - textarea.scrollTop;
-  if (pool.length === 0) {
-    for (let index = 0; index < SPARK_POOL_SIZE; index += 1) {
-      const sprite = document.createElement("span");
-      sprite.className = "type-spark";
-      fx.append(sprite);
-      pool.push(sprite);
-    }
-  }
-  const sprite = pool[cursor.current % pool.length];
-  cursor.current += 1;
-  if (!sprite) return;
-  sprite.textContent = char;
-  sprite.style.left = `${x}px`;
-  sprite.style.top = `${y}px`;
-  sprite.classList.remove("type-spark--run");
-  void sprite.offsetWidth;
-  sprite.classList.add("type-spark--run");
 }
 
 function audioLabel(
