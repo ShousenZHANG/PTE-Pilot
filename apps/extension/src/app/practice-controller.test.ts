@@ -49,37 +49,97 @@ describe("PracticeController operation context", () => {
     ).toBe(true);
   });
 
-  it("bootstraps only the exact missing weekly-set identity diagnostic", async () => {
+  it("starts an in-memory session for the exact missing set identity diagnostic", async () => {
     const module = (await import("./practice-controller")) as unknown as Record<
       string,
       unknown
     >;
-    const shouldBootstrap = module.shouldBootstrapPredictionEdition as (
+    expect(module.predictionEditionStartupMode).toBeTypeOf("function");
+    const startupMode = module.predictionEditionStartupMode as (
       probe: unknown,
-    ) => boolean;
+    ) => "verified" | "session" | "reject";
 
     expect(
-      shouldBootstrap({
+      startupMode({
         ok: false,
         diagnostic: {
           code: "INVALID_QUESTION",
           detail: "question:prediction-edition-unverified",
         },
       }),
-    ).toBe(true);
+    ).toBe("session");
     for (const detail of [
       "question:prediction-edition-ambiguous",
       "question:prediction-total-changed",
       "input:missing",
     ]) {
       expect(
-        shouldBootstrap({
+        startupMode({
           ok: false,
           diagnostic: { code: "SITE_CHANGED", detail },
         }),
-      ).toBe(false);
+      ).toBe("reject");
     }
-    expect(shouldBootstrap({ ok: true })).toBe(false);
+    expect(startupMode({ ok: true })).toBe("verified");
+  });
+
+  it("allows persistence only for non-session prediction editions", async () => {
+    const module = (await import("./practice-controller")) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(module.canPersistPredictionEdition).toBeTypeOf("function");
+    const canPersist = module.canPersistPredictionEdition as (
+      edition: string,
+    ) => boolean;
+
+    expect(canPersist("session:current-tab-token")).toBe(false);
+    expect(canPersist("provisional:bootstrap-token")).toBe(false);
+    expect(canPersist("yc-set-192-0123456789abcdef")).toBe(true);
+    expect(canPersist("weekly-2026-W29")).toBe(true);
+  });
+
+  it("keeps incrementally visited session questions in memory", async () => {
+    const module = (await import("./practice-controller")) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(module.SessionIndexCheckpoints).toBeTypeOf("function");
+    const SessionIndexCheckpoints =
+      module.SessionIndexCheckpoints as new () => {
+        saveQuestion(question: unknown): Promise<void>;
+        saveSnapshot(snapshot: unknown): Promise<void>;
+        resumeQuestions(): Array<{ questionId: string }>;
+        readonly snapshot: { orderedQuestionIds: string[] } | null;
+      };
+    const checkpoints = new SessionIndexCheckpoints();
+    const question = (position: number) => ({
+      predictionEdition: "session:tab-token",
+      questionId: `q-${position}`,
+      sitePosition: position,
+      siteTotal: 3,
+      tags: [],
+      discoveredAt: new Date(0).toISOString(),
+      schemaVersion: 1,
+    });
+    const partial = (position: number) => ({
+      predictionEdition: "session:tab-token",
+      orderedQuestionIds: [`q-${position}`],
+      siteTotal: 3,
+      completeness: "partial" as const,
+      checkpointPosition: position,
+      schemaVersion: 1,
+    });
+
+    await checkpoints.saveQuestion(question(2));
+    await checkpoints.saveSnapshot(partial(2));
+    await checkpoints.saveQuestion(question(1));
+    await checkpoints.saveSnapshot(partial(1));
+
+    expect(
+      checkpoints.resumeQuestions().map((item) => item.questionId),
+    ).toEqual(["q-1", "q-2"]);
+    expect(checkpoints.snapshot?.orderedQuestionIds).toEqual(["q-1", "q-2"]);
   });
 
   it("invalidates redo completion when identity, epoch, or generation changes", async () => {

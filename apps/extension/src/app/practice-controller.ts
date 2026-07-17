@@ -102,11 +102,27 @@ export async function runGuardedControllerOperation(options: {
   }
 }
 
-export function shouldBootstrapPredictionEdition(probe: ProbeResult): boolean {
-  return (
-    !probe.ok &&
-    probe.diagnostic.detail === "question:prediction-edition-unverified"
+export type PredictionEditionStartupMode = "verified" | "session" | "reject";
+
+export function predictionEditionStartupMode(
+  probe: ProbeResult,
+): PredictionEditionStartupMode {
+  if (probe.ok) return "verified";
+  return probe.diagnostic.detail === "question:prediction-edition-unverified"
+    ? "session"
+    : "reject";
+}
+
+export function canPersistPredictionEdition(edition: string): boolean {
+  return !["session:", "provisional:"].some((prefix) =>
+    edition.startsWith(prefix),
   );
+}
+
+interface ControllerIndexCheckpoints extends IndexCheckpointPort {
+  readonly snapshot: IndexSnapshot | null;
+  isCompleteFor(identity: QuestionIdentity): boolean;
+  hasCompleteEdition(predictionEdition: string, total: number): boolean;
 }
 
 export class PracticeController extends EventTarget {
@@ -117,8 +133,11 @@ export class PracticeController extends EventTarget {
   #answerGate: AnswerGate | null = null;
   #audio: AudioBroker | null = null;
   #indexer: QuestionIndexer | null = null;
-  #checkpoints: RuntimeIndexCheckpoints | null = null;
+  #checkpoints: ControllerIndexCheckpoints | null = null;
   #predictionBootstrap: PredictionEditionBootstrap | null = null;
+  #sessionMode = false;
+  readonly #sessionDrafts = new Map<string, string>();
+  readonly #sessionMarks = new Map<string, boolean>();
   #settings: UserSettings = defaultSettings();
   #draftRevision = 0;
   #startedAt = performance.now();
@@ -177,51 +196,8 @@ export class PracticeController extends EventTarget {
       if (!this.isCurrentInitialization(generation)) return;
     }
     let probe = this.#site.probe();
-    let bootstrapResult: PredictionEditionBootstrapResult | null = null;
-    if (shouldBootstrapPredictionEdition(probe)) {
-      const bootstrap = new PredictionEditionBootstrap(this.#site);
-      this.#predictionBootstrap = bootstrap;
-      bootstrap.addEventListener("progress", (event) => {
-        if (
-          !this.isCurrentInitialization(generation) ||
-          this.#predictionBootstrap !== bootstrap
-        )
-          return;
-        const { completed, total } = (
-          event as CustomEvent<{ completed: number; total: number }>
-        ).detail;
-        this.patch({ notice: `正在验证周预测题集 ${completed}/${total}` });
-      });
-      this.patch({
-        phase: "PROBING",
-        indexStatus: "DISCOVERING",
-        siteStatus: "首次验证周预测题集",
-        notice: "正在依次读取周预测题号；完成后自动恢复当前题",
-      });
-      try {
-        bootstrapResult = await bootstrap.run();
-      } catch (error) {
-        if (
-          !this.isCurrentInitialization(generation) ||
-          this.#predictionBootstrap !== bootstrap
-        )
-          return;
-        this.#predictionBootstrap = null;
-        await bootstrap.dispose();
-        const message = safeError(error);
-        this.patch({
-          phase: "SITE_CHANGED",
-          indexStatus: "FAILED",
-          siteStatus: "周预测题集验证失败",
-          notice: message,
-          fault: diagnosticFault("SITE_CHANGED", message),
-        });
-        return;
-      }
-      if (this.#predictionBootstrap === bootstrap)
-        this.#predictionBootstrap = null;
-      await bootstrap.dispose();
-      if (!this.isCurrentInitialization(generation)) return;
+    if (predictionEditionStartupMode(probe) === "session") {
+      this.#site.beginSessionPredictionEdition();
       probe = this.#site.probe();
     }
     if (!probe.ok) {
@@ -239,6 +215,10 @@ export class PracticeController extends EventTarget {
       });
       return;
     }
+    const sessionMode = !canPersistPredictionEdition(
+      probe.identity.predictionEdition,
+    );
+    this.#sessionMode = sessionMode;
 
     this.#navigation = new NavigationCoordinator(this.#site);
     this.#answerGate = new AnswerGate(this.#site);
@@ -255,17 +235,19 @@ export class PracticeController extends EventTarget {
       this.patch({ audioStatus: (event as CustomEvent<string>).detail });
     });
 
-    const checkpoints = new RuntimeIndexCheckpoints(this.#runtime);
+    const checkpoints: ControllerIndexCheckpoints = sessionMode
+      ? new SessionIndexCheckpoints()
+      : new RuntimeIndexCheckpoints(this.#runtime);
     try {
-      if (bootstrapResult) await checkpoints.adoptBootstrap(bootstrapResult);
-      else await checkpoints.hydrate(probe.identity.predictionEdition);
+      if (checkpoints instanceof RuntimeIndexCheckpoints)
+        await checkpoints.hydrate(probe.identity.predictionEdition);
     } catch (error) {
       if (this.isCurrentInitialization(generation))
         this.fail("STORAGE_ERROR", "周预测索引保存失败", error);
       return;
     }
     if (
-      !bootstrapResult &&
+      !sessionMode &&
       checkpoints.hasCompleteEdition(
         probe.identity.predictionEdition,
         probe.identity.total,
@@ -341,7 +323,9 @@ export class PracticeController extends EventTarget {
 
     const [settings, restored] = await Promise.all([
       this.#runtime.loadSettings().catch(() => null),
-      this.#runtime.restoreSession().catch(() => null),
+      sessionMode
+        ? Promise.resolve(null)
+        : this.#runtime.restoreSession().catch(() => null),
     ]);
     if (!this.isCurrentInitialization(generation)) return;
     const navigation = this.#navigation;
@@ -406,7 +390,9 @@ export class PracticeController extends EventTarget {
       draft,
       marked,
       siteStatus: "已同步",
-      hermesStatus: "Hermes 检查中，本地练习可用",
+      hermesStatus: sessionMode
+        ? "当前题集未验证；仅本次会话，不写入 Hermes"
+        : "Hermes 检查中，本地练习可用",
       audioStatus: "EMPTY",
       indexStatus: checkpoints.isCompleteFor(activeIdentity)
         ? "COMPLETE"
@@ -415,15 +401,17 @@ export class PracticeController extends EventTarget {
           : "IDLE",
     });
     this.#startedAt = performance.now();
-    void this.#runtime.gatewayHealth().then((health) => {
-      if (!this.isCurrentInitialization(generation)) return;
-      this.patch({
-        hermesStatus:
-          health?.hermes.status === "ready"
-            ? "Hermes 已连接"
-            : "Hermes 离线，本地练习可用",
+    if (!sessionMode) {
+      void this.#runtime.gatewayHealth().then((health) => {
+        if (!this.isCurrentInitialization(generation)) return;
+        this.patch({
+          hermesStatus:
+            health?.hermes.status === "ready"
+              ? "Hermes 已连接"
+              : "Hermes 离线，本地练习可用",
+        });
       });
-    });
+    }
     if (!checkpoints.isCompleteFor(activeIdentity)) void this.discoverIndex();
   }
 
@@ -463,12 +451,18 @@ export class PracticeController extends EventTarget {
         errors: review.errors,
         completedAt: new Date().toISOString(),
       };
-      await this.#runtime.commitAttempt(identity.predictionEdition, attempt);
+      if (canPersistPredictionEdition(identity.predictionEdition)) {
+        await this.#runtime.commitAttempt(identity.predictionEdition, attempt);
+      }
       if (!this.isCurrentQuestion(identity, epoch)) return;
       this.patch({
         phase: "REVIEW",
         review,
-        notice: review.errors.length ? "已记录错词" : "完全正确",
+        notice: this.#sessionMode
+          ? "本次结果仅保留在当前会话；完整索引后才写入长期记忆"
+          : review.errors.length
+            ? "已记录错词"
+            : "完全正确",
       });
     } catch (error) {
       if (!this.isCurrentQuestion(identity, epoch)) return;
@@ -530,6 +524,10 @@ export class PracticeController extends EventTarget {
       !new Set(["ANSWERING", "REVIEW", "COMMAND"]).has(this.#state.phase)
     )
       return;
+    if (!canPersistPredictionEdition(identity.predictionEdition)) {
+      this.patch({ notice: "当前题集仅会话可用；请用上一题/下一题导航" });
+      return;
+    }
     const returnPhase =
       this.#state.phase === "REVIEW"
         ? "REVIEW"
@@ -790,11 +788,15 @@ export class PracticeController extends EventTarget {
     if (!identity) return;
     const epoch = this.#latestNavigationEpoch;
     const marked = !this.#state.marked;
-    await this.#runtime.setMarked(
-      identity.predictionEdition,
-      identity.questionId,
-      marked,
-    );
+    if (canPersistPredictionEdition(identity.predictionEdition)) {
+      await this.#runtime.setMarked(
+        identity.predictionEdition,
+        identity.questionId,
+        marked,
+      );
+    } else {
+      this.#sessionMarks.set(sessionQuestionKey(identity), marked);
+    }
     if (!this.isCurrentQuestion(identity, epoch)) return;
     this.patch({ marked, notice: marked ? "已标记" : "已取消标记" });
   }
@@ -806,6 +808,10 @@ export class PracticeController extends EventTarget {
   async loadRankedReview(): Promise<boolean> {
     const identity = this.#state.identity;
     if (!identity || this.#state.phase !== "COMMAND") return false;
+    if (!canPersistPredictionEdition(identity.predictionEdition)) {
+      this.patch({ notice: "完整索引后才能生成长期记忆复习顺序" });
+      return false;
+    }
     const initializeGeneration = this.#initializeGeneration;
     const requestGeneration = ++this.#rankRequestGeneration;
     const isCurrent = () =>
@@ -901,6 +907,10 @@ export class PracticeController extends EventTarget {
   }
 
   async buildFullIndex(): Promise<void> {
+    if (this.#sessionMode) {
+      await this.buildVerifiedIndexFromSession();
+      return;
+    }
     if (
       !this.#indexer ||
       !this.#navigation ||
@@ -963,6 +973,10 @@ export class PracticeController extends EventTarget {
   }
 
   pauseIndex(): void {
+    if (this.#predictionBootstrap) {
+      this.patch({ notice: "首次验证不能暂停；按 X 可取消并返回当前题" });
+      return;
+    }
     if (!this.#indexer?.pause()) return;
     this.patch({
       indexStatus: "PAUSED",
@@ -979,6 +993,13 @@ export class PracticeController extends EventTarget {
   }
 
   cancelIndex(): void {
+    if (this.#predictionBootstrap?.cancel()) {
+      this.patch({
+        indexStatus: "PARTIAL",
+        notice: "正在取消完整验证并恢复当前题",
+      });
+      return;
+    }
     if (!this.#indexer?.cancel()) return;
     this.patch({
       indexStatus: "PARTIAL",
@@ -989,6 +1010,13 @@ export class PracticeController extends EventTarget {
   async flushDraft(): Promise<void> {
     const identity = this.#state.identity;
     if (!identity) return;
+    if (!canPersistPredictionEdition(identity.predictionEdition)) {
+      this.#sessionDrafts.set(
+        sessionQuestionKey(identity),
+        this.#draftProvider(),
+      );
+      return;
+    }
     this.#draftRevision += 1;
     await this.#runtime.saveDraft({
       predictionEdition: identity.predictionEdition,
@@ -1034,6 +1062,114 @@ export class PracticeController extends EventTarget {
       throw new Error("restore:question-mismatch");
     }
     return navigation.current;
+  }
+
+  private async buildVerifiedIndexFromSession(): Promise<void> {
+    const identity = this.#state.identity;
+    if (
+      !identity ||
+      this.#state.phase !== "COMMAND" ||
+      canPersistPredictionEdition(identity.predictionEdition)
+    )
+      return;
+    const generation = this.#initializeGeneration;
+    const sessionKey = sessionQuestionKey(identity);
+    const sessionMarked = this.#sessionMarks.get(sessionKey) ?? false;
+    await this.flushDraft().catch(() => undefined);
+    const sessionDraft = this.#sessionDrafts.get(sessionKey) ?? "";
+    if (!this.isCurrentInitialization(generation)) return;
+    await this.teardownActivePorts();
+    if (!this.isCurrentInitialization(generation)) return;
+
+    const bootstrap = new PredictionEditionBootstrap(this.#site);
+    this.#predictionBootstrap = bootstrap;
+    bootstrap.addEventListener("progress", (event) => {
+      if (
+        !this.isCurrentInitialization(generation) ||
+        this.#predictionBootstrap !== bootstrap
+      )
+        return;
+      const { completed, total } = (
+        event as CustomEvent<{ completed: number; total: number }>
+      ).detail;
+      this.patch({ notice: `正在验证并索引题集 ${completed}/${total}` });
+    });
+    this.patch({
+      phase: "NAVIGATING",
+      indexStatus: "INDEXING",
+      siteStatus: "正在完整验证题集",
+      notice: "这是唯一会遍历全部题目的操作；按 X 可取消",
+    });
+
+    let verifiedEdition: string | null = null;
+    try {
+      const result = await bootstrap.run();
+      verifiedEdition = result.edition;
+      if (
+        !this.isCurrentInitialization(generation) ||
+        this.#predictionBootstrap !== bootstrap
+      )
+        return;
+      const checkpoints = new RuntimeIndexCheckpoints(this.#runtime);
+      await checkpoints.adoptBootstrap(result);
+      if (sessionDraft) {
+        this.#draftRevision += 1;
+        await this.#runtime
+          .saveDraft({
+            predictionEdition: result.edition,
+            questionId: identity.questionId,
+            text: sessionDraft,
+            revision: this.#draftRevision,
+            updatedAt: new Date().toISOString(),
+          })
+          .catch(() => undefined);
+      }
+      if (sessionMarked) {
+        await this.#runtime
+          .setMarked(result.edition, identity.questionId, true)
+          .catch(() => undefined);
+      }
+      this.#sessionDrafts.clear();
+      this.#sessionMarks.clear();
+      this.#predictionBootstrap = null;
+      await bootstrap.dispose();
+      await this.initialize();
+      if (!this.#disposed) {
+        this.patch({
+          indexStatus: "COMPLETE",
+          notice: `已验证并索引 ${result.snapshot.siteTotal} 题；持久练习记录已启用`,
+        });
+      }
+    } catch (error) {
+      if (
+        !this.isCurrentInitialization(generation) ||
+        this.#predictionBootstrap !== bootstrap
+      )
+        return;
+      this.#predictionBootstrap = null;
+      await bootstrap.dispose();
+      const message = safeError(error);
+      if (verifiedEdition)
+        this.#site.invalidateVerifiedPredictionEdition(verifiedEdition);
+      await this.initialize();
+      if (!this.#disposed) {
+        const recoveredIdentity = this.#state.identity;
+        if (
+          recoveredIdentity &&
+          !canPersistPredictionEdition(recoveredIdentity.predictionEdition)
+        ) {
+          const recoveredKey = sessionQuestionKey(recoveredIdentity);
+          this.#sessionDrafts.set(recoveredKey, sessionDraft);
+          this.#sessionMarks.set(recoveredKey, sessionMarked);
+        }
+        this.patch({
+          indexStatus: "PARTIAL",
+          draft: sessionDraft,
+          marked: sessionMarked,
+          notice: `完整验证未完成：${message}；已返回当前页会话`,
+        });
+      }
+    }
   }
 
   private async acceptQuestion(
@@ -1119,6 +1255,8 @@ export class PracticeController extends EventTarget {
   }
 
   private async readMarked(identity: QuestionIdentity): Promise<boolean> {
+    if (!canPersistPredictionEdition(identity.predictionEdition))
+      return this.#sessionMarks.get(sessionQuestionKey(identity)) ?? false;
     const snapshot = await this.#runtime
       .getRankCandidates(identity.predictionEdition, [identity.questionId])
       .catch(() => null);
@@ -1126,6 +1264,7 @@ export class PracticeController extends EventTarget {
   }
 
   private async persistSession(identity: QuestionIdentity): Promise<void> {
+    if (!canPersistPredictionEdition(identity.predictionEdition)) return;
     const write = this.#sessionWriteChain
       .catch(() => undefined)
       .then(() => this.#runtime.saveSession(toQuestionRef(identity)));
@@ -1134,6 +1273,8 @@ export class PracticeController extends EventTarget {
   }
 
   private async safeLoadDraft(identity: QuestionIdentity): Promise<string> {
+    if (!canPersistPredictionEdition(identity.predictionEdition))
+      return this.#sessionDrafts.get(sessionQuestionKey(identity)) ?? "";
     const checkpoint = await this.#runtime
       .loadDraft(identity.predictionEdition, identity.questionId)
       .catch(() => null);
@@ -1299,7 +1440,62 @@ export class PracticeController extends EventTarget {
   }
 }
 
-export class RuntimeIndexCheckpoints implements IndexCheckpointPort {
+export class SessionIndexCheckpoints implements ControllerIndexCheckpoints {
+  readonly #questions = new Map<number, IndexedQuestion>();
+  #snapshot: IndexSnapshot | null = null;
+
+  get snapshot(): IndexSnapshot | null {
+    return this.#snapshot;
+  }
+
+  resumeSnapshot(): IndexSnapshot | null {
+    return this.#snapshot;
+  }
+
+  resumeQuestions(): IndexedQuestion[] {
+    return [...this.#questions.values()].sort(
+      (left, right) => left.sitePosition - right.sitePosition,
+    );
+  }
+
+  isCompleteFor(identity: QuestionIdentity): boolean {
+    return (
+      this.hasCompleteEdition(identity.predictionEdition, identity.total) &&
+      this.#questions.get(identity.position)?.questionId === identity.questionId
+    );
+  }
+
+  hasCompleteEdition(predictionEdition: string, total: number): boolean {
+    return (
+      this.#snapshot?.completeness === "complete" &&
+      this.#snapshot.predictionEdition === predictionEdition &&
+      this.#snapshot.siteTotal === total
+    );
+  }
+
+  async saveQuestion(question: IndexedQuestion): Promise<void> {
+    this.#questions.set(question.sitePosition, question);
+  }
+
+  async saveSnapshot(snapshot: IndexSnapshot): Promise<void> {
+    const questions = this.resumeQuestions().filter(
+      (question) =>
+        question.predictionEdition === snapshot.predictionEdition &&
+        question.siteTotal === snapshot.siteTotal,
+    );
+    const complete =
+      snapshot.completeness === "complete" &&
+      questions.length === snapshot.siteTotal &&
+      questions.every((question, index) => question.sitePosition === index + 1);
+    this.#snapshot = {
+      ...snapshot,
+      orderedQuestionIds: questions.map((question) => question.questionId),
+      completeness: complete ? "complete" : "partial",
+    };
+  }
+}
+
+export class RuntimeIndexCheckpoints implements ControllerIndexCheckpoints {
   readonly #runtime: RuntimeClient;
   readonly #questions = new Map<string, IndexedQuestion>();
   #snapshot: IndexSnapshot | null = null;
@@ -1465,6 +1661,10 @@ function sameIdentity(
     left.position === right.position &&
     left.total === right.total
   );
+}
+
+function sessionQuestionKey(identity: QuestionIdentity): string {
+  return `${identity.predictionEdition}:${identity.questionId}`;
 }
 
 function defaultSettings(): UserSettings {

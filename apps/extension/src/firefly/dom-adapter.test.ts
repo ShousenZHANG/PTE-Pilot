@@ -23,6 +23,39 @@ describe("FireflyDomAdapter prediction edition probe guard", () => {
       },
     });
   });
+
+  it("exposes session-only prediction identity activation", () => {
+    const adapter = new FireflyDomAdapter({} as Document);
+    const beginSession = (
+      adapter as unknown as { beginSessionPredictionEdition?: () => string }
+    ).beginSessionPredictionEdition;
+
+    expect(beginSession).toBeTypeOf("function");
+    expect(beginSession?.call(adapter)).toBeTypeOf("string");
+  });
+
+  it("includes list items when collecting visible identity evidence", () => {
+    const selectors: string[] = [];
+    const document = {
+      querySelectorAll(selector: string) {
+        selectors.push(selector);
+        return [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+
+    const visibleElements = (
+      adapter as unknown as { visibleElements(): HTMLElement[] }
+    ).visibleElements();
+
+    expect(visibleElements).toEqual([]);
+    expect(
+      selectors[0]
+        ?.split(",")
+        .map((selector) => selector.trim())
+        .includes("li"),
+    ).toBe(true);
+  });
 });
 
 describe("verifiedPredictionEdition", () => {
@@ -165,6 +198,29 @@ describe("PredictionEditionOverrideState", () => {
       detail: "question:prediction-edition-unverified",
     });
     expect(state.resolve(193)).toBe("provisional:bootstrap-1");
+  });
+
+  it("keeps a session identity readable without blocking the probe", () => {
+    const state = new PredictionEditionOverrideState(() => "session-1");
+    const beginSession = (state as unknown as { beginSession?: () => string })
+      .beginSession;
+
+    expect(beginSession).toBeTypeOf("function");
+    expect(beginSession?.call(state)).toBe("session-1");
+    expect(state.probeDiagnostic()).toBeNull();
+    expect(state.resolve(193)).toBe("session:session-1");
+  });
+
+  it("invalidates a session identity when the question total changes", () => {
+    const state = new PredictionEditionOverrideState(() => "session-1");
+    const beginSession = (state as unknown as { beginSession?: () => string })
+      .beginSession;
+
+    expect(beginSession).toBeTypeOf("function");
+    beginSession?.call(state);
+    expect(state.resolve(193)).toBe("session:session-1");
+    expect(state.resolve(192)).toBeNull();
+    expect(state.resolve(193)).toBeNull();
   });
 
   it("does not let a stale token clear a newer bootstrap", () => {

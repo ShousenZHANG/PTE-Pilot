@@ -61,7 +61,7 @@ function toDiagnostic(error: unknown, capability: string): AdapterDiagnostic {
 type PredictionEditionOverride = {
   token: string;
   value: string;
-  state: "provisional" | "verified";
+  state: "provisional" | "session" | "verified";
   total: number | null;
 };
 
@@ -84,6 +84,17 @@ export class PredictionEditionOverrideState {
     return token;
   }
 
+  beginSession(): string {
+    const token = this.#createToken();
+    this.#current = {
+      token,
+      value: `session:${token}`,
+      state: "session",
+      total: null,
+    };
+    return token;
+  }
+
   probeDiagnostic(): AdapterDiagnostic | null {
     return this.#current?.state === "provisional"
       ? {
@@ -98,7 +109,7 @@ export class PredictionEditionOverrideState {
     if (!current) return null;
     if (current.total === null) current.total = expectedTotal;
     if (current.total !== expectedTotal) {
-      if (current.state === "verified") {
+      if (current.state !== "provisional") {
         this.#current = null;
         return null;
       }
@@ -261,6 +272,10 @@ export class FireflyDomAdapter {
 
   beginProvisionalPredictionEdition(): string {
     return this.#predictionEditionOverride.begin();
+  }
+
+  beginSessionPredictionEdition(): string {
+    return this.#predictionEditionOverride.beginSession();
   }
 
   adoptVerifiedPredictionEdition(
@@ -530,7 +545,7 @@ export class FireflyDomAdapter {
   private visibleElements(): HTMLElement[] {
     return Array.from(
       this.#document.querySelectorAll<HTMLElement>(
-        "[data-question-id], [data-exercise-id], [aria-label], h1, h2, h3, h4, span, strong, b, label",
+        "[data-question-id], [data-exercise-id], [aria-label], h1, h2, h3, h4, span, strong, b, label, li",
       ),
     ).filter(isVisible);
   }

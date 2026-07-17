@@ -27,6 +27,7 @@ const trustedSender = {
 };
 
 const provisionalEdition = "provisional:bootstrap-token";
+const sessionEdition = "session:current-tab-token";
 const verifiedEdition = "yc-set-193-0123456789abcdef";
 const requestId = "6ab7bfd2-6f84-4935-8f68-5ae8cae5da41";
 
@@ -57,141 +58,154 @@ const rankRequest = {
   ],
 };
 
-const provisionalRequests = [
-  {
-    location: "top-level loadDraft edition",
-    request: {
-      requestId,
-      action: "storage/loadDraft",
-      predictionEdition: provisionalEdition,
-      questionId: "131020",
-    },
-  },
-  {
-    location: "nested draft edition",
-    request: {
-      requestId,
-      action: "storage/saveDraft",
-      draft: {
-        predictionEdition: provisionalEdition,
+function blockedEditionRequests(blockedEdition: string) {
+  return [
+    {
+      location: "top-level loadDraft edition",
+      request: {
+        requestId,
+        action: "storage/loadDraft",
+        predictionEdition: blockedEdition,
         questionId: "131020",
-        text: "answer",
-        revision: 0,
-        updatedAt: "2026-07-15T10:00:00.000Z",
       },
     },
-  },
-  {
-    location: "top-level commitAttempt edition",
-    request: {
-      requestId,
-      action: "storage/commitAttempt",
-      predictionEdition: provisionalEdition,
-      attempt,
+    {
+      location: "nested draft edition",
+      request: {
+        requestId,
+        action: "storage/saveDraft",
+        draft: {
+          predictionEdition: blockedEdition,
+          questionId: "131020",
+          text: "answer",
+          revision: 0,
+          updatedAt: "2026-07-15T10:00:00.000Z",
+        },
+      },
     },
-  },
-  {
-    location: "top-level setMarked edition",
-    request: {
-      requestId,
-      action: "storage/setMarked",
-      predictionEdition: provisionalEdition,
-      questionId: "131020",
-      marked: true,
+    {
+      location: "top-level commitAttempt edition",
+      request: {
+        requestId,
+        action: "storage/commitAttempt",
+        predictionEdition: blockedEdition,
+        attempt,
+      },
     },
-  },
-  {
-    location: "top-level getRankCandidates edition",
-    request: {
-      requestId,
-      action: "storage/getRankCandidates",
-      predictionEdition: provisionalEdition,
-      questionIds: ["131020"],
-    },
-  },
-  {
-    location: "nested session question edition",
-    request: {
-      requestId,
-      action: "storage/saveSession",
-      question: {
-        predictionEdition: provisionalEdition,
+    {
+      location: "top-level setMarked edition",
+      request: {
+        requestId,
+        action: "storage/setMarked",
+        predictionEdition: blockedEdition,
         questionId: "131020",
-        position: 1,
-        total: 193,
+        marked: true,
       },
     },
-  },
-  {
-    location: "top-level loadIndexSnapshot edition",
-    request: {
-      requestId,
-      action: "storage/loadIndexSnapshot",
-      predictionEdition: provisionalEdition,
-    },
-  },
-  {
-    location: "nested snapshot edition",
-    request: {
-      requestId,
-      action: "storage/saveIndexSnapshot",
-      snapshot: {
-        predictionEdition: provisionalEdition,
-        orderedQuestionIds: ["131020"],
-        siteTotal: 193,
-        completeness: "partial",
-        checkpointPosition: 1,
-        schemaVersion: 1,
+    {
+      location: "top-level getRankCandidates edition",
+      request: {
+        requestId,
+        action: "storage/getRankCandidates",
+        predictionEdition: blockedEdition,
+        questionIds: ["131020"],
       },
-      questions: [
-        {
+    },
+    {
+      location: "nested session question edition",
+      request: {
+        requestId,
+        action: "storage/saveSession",
+        question: {
+          predictionEdition: blockedEdition,
+          questionId: "131020",
+          position: 1,
+          total: 193,
+        },
+      },
+    },
+    {
+      location: "top-level loadIndexSnapshot edition",
+      request: {
+        requestId,
+        action: "storage/loadIndexSnapshot",
+        predictionEdition: blockedEdition,
+      },
+    },
+    {
+      location: "nested snapshot edition",
+      request: {
+        requestId,
+        action: "storage/saveIndexSnapshot",
+        snapshot: {
+          predictionEdition: blockedEdition,
+          orderedQuestionIds: ["131020"],
+          siteTotal: 193,
+          completeness: "partial",
+          checkpointPosition: 1,
+          schemaVersion: 1,
+        },
+        questions: [
+          {
+            predictionEdition: verifiedEdition,
+            questionId: "131020",
+            sitePosition: 1,
+            siteTotal: 193,
+            tags: [],
+            discoveredAt: "2026-07-15T10:00:00.000Z",
+            schemaVersion: 1,
+          },
+        ],
+      },
+    },
+    {
+      location: "nested indexed question edition",
+      request: {
+        requestId,
+        action: "storage/saveIndexSnapshot",
+        snapshot: {
           predictionEdition: verifiedEdition,
-          questionId: "131020",
-          sitePosition: 1,
+          orderedQuestionIds: ["131020"],
           siteTotal: 193,
-          tags: [],
-          discoveredAt: "2026-07-15T10:00:00.000Z",
+          completeness: "partial",
+          checkpointPosition: 1,
           schemaVersion: 1,
         },
-      ],
-    },
-  },
-  {
-    location: "nested indexed question edition",
-    request: {
-      requestId,
-      action: "storage/saveIndexSnapshot",
-      snapshot: {
-        predictionEdition: verifiedEdition,
-        orderedQuestionIds: ["131020"],
-        siteTotal: 193,
-        completeness: "partial",
-        checkpointPosition: 1,
-        schemaVersion: 1,
+        questions: [
+          {
+            predictionEdition: blockedEdition,
+            questionId: "131020",
+            sitePosition: 1,
+            siteTotal: 193,
+            tags: [],
+            discoveredAt: "2026-07-15T10:00:00.000Z",
+            schemaVersion: 1,
+          },
+        ],
       },
-      questions: [
-        {
-          predictionEdition: provisionalEdition,
-          questionId: "131020",
-          sitePosition: 1,
-          siteTotal: 193,
-          tags: [],
-          discoveredAt: "2026-07-15T10:00:00.000Z",
-          schemaVersion: 1,
-        },
-      ],
     },
-  },
-  {
-    location: "top-level gateway rank edition",
-    request: {
-      requestId,
-      action: "gateway/rank",
-      predictionEdition: provisionalEdition,
-      request: rankRequest,
+    {
+      location: "top-level gateway rank edition",
+      request: {
+        requestId,
+        action: "gateway/rank",
+        predictionEdition: blockedEdition,
+        request: rankRequest,
+      },
     },
-  },
-] as const;
+  ] as const;
+}
+
+const blockedEditionCases = [
+  { kind: "provisional", edition: provisionalEdition },
+  { kind: "session", edition: sessionEdition },
+].flatMap(({ kind, edition }) =>
+  blockedEditionRequests(edition).map(({ location, request }) => ({
+    kind,
+    location,
+    request,
+  })),
+);
 
 function createNeverCalledDependencies() {
   const repositoryCall = vi.fn();
@@ -215,8 +229,8 @@ function createNeverCalledDependencies() {
 }
 
 describe("runtime handler", () => {
-  test.each(provisionalRequests)(
-    "rejects provisional prediction edition at $location before side effects",
+  test.each(blockedEditionCases)(
+    "rejects $kind prediction edition at $location before side effects",
     async ({ request }) => {
       expect(RuntimeRequestSchema.safeParse(request).success).toBe(true);
       const { dependencies, calls } = createNeverCalledDependencies();

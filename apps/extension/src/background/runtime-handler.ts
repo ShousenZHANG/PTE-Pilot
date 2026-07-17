@@ -66,9 +66,11 @@ function predictionEditions(request: RuntimeRequest): readonly string[] {
   }
 }
 
-function hasProvisionalPredictionEdition(request: RuntimeRequest): boolean {
+const EPHEMERAL_EDITION_PREFIXES = ["provisional:", "session:"] as const;
+
+function hasEphemeralPredictionEdition(request: RuntimeRequest): boolean {
   return predictionEditions(request).some((edition) =>
-    edition.startsWith("provisional:"),
+    EPHEMERAL_EDITION_PREFIXES.some((prefix) => edition.startsWith(prefix)),
   );
 }
 
@@ -93,9 +95,9 @@ export function createRuntimeMessageHandler(
     if (!parsed.success) return undefined;
     const request = parsed.data;
     try {
-      if (hasProvisionalPredictionEdition(request)) {
+      if (hasEphemeralPredictionEdition(request)) {
         throw new InvalidRuntimeRequestError(
-          "provisional prediction edition cannot cross the runtime boundary",
+          "ephemeral prediction edition cannot cross the runtime boundary",
         );
       }
       const response = await execute(request, dependencies);
