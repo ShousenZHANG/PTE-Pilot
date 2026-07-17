@@ -689,6 +689,10 @@ export class PracticeController extends EventTarget {
         this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
         return;
       }
+      if (message === "audio:not-ready") {
+        this.patch({ notice: "音频尚未就绪；稍候一秒再按 Alt+P" });
+        return;
+      }
       this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
     } finally {
       this.#audioCommandPending = false;
@@ -697,6 +701,39 @@ export class PracticeController extends EventTarget {
 
   audioSnapshot(): AudioSnapshot | null {
     return this.#audio?.snapshot() ?? null;
+  }
+
+  /*
+   * Countdown-driven playback is best-effort convenience: whatever goes
+   * wrong, it must degrade to a hint, never to AUDIO_ERROR. Manual play
+   * keeps the strict error surface.
+   */
+  async autoPlayAudio(): Promise<void> {
+    const audio = this.#audio;
+    const identity = this.#state.identity;
+    const epoch = this.#latestNavigationEpoch;
+    const generation = this.#initializeGeneration;
+    if (!audio || !identity || this.#audioCommandPending) return;
+    this.#audioCommandPending = true;
+    try {
+      await audio.play();
+      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
+        return;
+      this.#replayCount += 1;
+      this.patch({ notice: "" });
+    } catch {
+      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
+        return;
+      this.patch({
+        audioStatus:
+          this.#state.audioStatus === "AUDIO_ERROR"
+            ? "READY"
+            : this.#state.audioStatus,
+        notice: "自动播放未成功；按 Alt+P 或点击底部播放",
+      });
+    } finally {
+      this.#audioCommandPending = false;
+    }
   }
 
   async restartAudio(): Promise<void> {
@@ -718,6 +755,10 @@ export class PracticeController extends EventTarget {
       const message = safeError(error);
       if (message === "audio:needs-gesture") {
         this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
+        return;
+      }
+      if (message === "audio:not-ready") {
+        this.patch({ notice: "音频尚未就绪；稍候一秒再按 Alt+P" });
         return;
       }
       this.patch({ audioStatus: "AUDIO_ERROR", notice: message });

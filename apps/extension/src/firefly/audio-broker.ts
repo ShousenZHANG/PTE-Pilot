@@ -163,6 +163,11 @@ export class AudioBroker extends EventTarget {
       this.setState("READY");
       throw new AudioBrokerError("audio:needs-gesture", { cause: error });
     }
+    if (error.name === "NotSupportedError") {
+      // The site has not attached a playable source yet (lazy src).
+      this.setState("EMPTY");
+      throw new AudioBrokerError("audio:not-ready", { cause: error });
+    }
     if (error.name === "AbortError") {
       const element = this.#element;
       if (element && !element.paused && !element.ended)
@@ -288,17 +293,16 @@ export class AudioBroker extends EventTarget {
     }
   }
 
+  /*
+   * Only native elements are stopped here: the site's play control is a
+   * toggle, so "pausing" through it while nothing plays would start audio.
+   */
   private failClosed(binding: {
     questionId: string;
     navigationEpoch: number;
   }): void {
     if (this.#binding !== binding) return;
     this.stopSiteAudio();
-    try {
-      this.#site.pauseAudio();
-    } catch {
-      // The fallback control may be absent; native elements are stopped.
-    }
     this.setState("AUDIO_ERROR");
   }
 

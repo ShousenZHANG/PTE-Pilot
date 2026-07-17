@@ -345,7 +345,7 @@ export function Cockpit(): React.JSX.Element | null {
     if (autoPlayIn === null || !open) return;
     if (autoPlayIn <= 0) {
       setAutoPlayIn(null);
-      void controllerRef.current?.play().catch(() => undefined);
+      void controllerRef.current?.autoPlayAudio();
       return;
     }
     const timer = setTimeout(

@@ -198,6 +198,21 @@ describe("AudioBroker direct element control", () => {
     expect(broker.state).toBe("READY");
   });
 
+  it("treats a missing source as not-ready instead of an error", async () => {
+    const element = new FakeAudioElement();
+    element.play = () =>
+      Promise.reject(new DOMException("no source", "NotSupportedError"));
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () => [element as unknown as HTMLAudioElement],
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+
+    await expect(broker.play()).rejects.toThrow("audio:not-ready");
+    expect(broker.state).toBe("EMPTY");
+  });
+
   it("swallows a play() aborted by a competing pause", async () => {
     const element = new FakeAudioElement();
     element.play = () =>
