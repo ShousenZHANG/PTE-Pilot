@@ -76,6 +76,7 @@ const INITIAL_STATE: CockpitViewState = {
   marked: false,
   words: [],
   rankedEntries: [],
+  reviewQueue: null,
   keymap: { ...DEFAULT_ALT_KEYMAP },
   fault: null,
 };
@@ -264,6 +265,25 @@ export function Cockpit(): React.JSX.Element | null {
       setCommandBusy(false);
       setPanel("none");
       await controller.navigateToQuestion(questionId);
+    },
+    [setPanel],
+  );
+
+  const startWrongDrive = useCallback(
+    async (questionIds: string[], session: number): Promise<void> => {
+      const controller = controllerRef.current;
+      const gate = commandSessionRef.current;
+      if (
+        !controller ||
+        !gate.isCurrent(session) ||
+        gate.busy ||
+        controller.state.phase !== "COMMAND"
+      )
+        return;
+      gate.invalidate();
+      setCommandBusy(false);
+      setPanel("none");
+      await controller.startWrongDrive(questionIds);
     },
     [setPanel],
   );
@@ -735,6 +755,11 @@ export function Cockpit(): React.JSX.Element | null {
           {state.indexStatus !== "IDLE" && (
             <span data-testid="index-status">索引 {state.indexStatus}</span>
           )}
+          {state.reviewQueue && (
+            <span className="queue-chip" data-testid="review-queue">
+              错题循环 {state.reviewQueue.position}/{state.reviewQueue.total}
+            </span>
+          )}
           <span data-testid="practice-notice" aria-live="polite">
             {state.notice}
           </span>
@@ -902,6 +927,10 @@ export function Cockpit(): React.JSX.Element | null {
           onChoose={(questionId) =>
             void navigateFromRankedReview(questionId, renderedCommandSession)
           }
+          onStartWrong={(questionIds) =>
+            void startWrongDrive(questionIds, renderedCommandSession)
+          }
+          onExitQueue={() => controllerRef.current?.exitWrongDrive()}
           commandRef={commandRef}
         />
       )}
@@ -916,6 +945,8 @@ function CommandLayer({
   busy,
   onAction,
   onChoose,
+  onStartWrong,
+  onExitQueue,
   commandRef,
 }: {
   panel: Panel;
@@ -924,6 +955,8 @@ function CommandLayer({
   busy: boolean;
   onAction: (action: KeyboardAction) => void;
   onChoose: (questionId: string) => void;
+  onStartWrong: (questionIds: string[]) => void;
+  onExitQueue: () => void;
   commandRef: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
   return (
@@ -948,7 +981,7 @@ function CommandLayer({
           disabled={busy}
           onClick={() => onAction("ranked-review")}
         >
-          <kbd>Q</kbd> 本地复习
+          <kbd>Q</kbd> 错题集
         </button>
         <button
           type="button"
@@ -989,7 +1022,10 @@ function CommandLayer({
           <RankedReview
             entries={state.rankedEntries}
             current={state.identity?.questionId}
+            queueActive={state.reviewQueue !== null}
             onChoose={onChoose}
+            onStartWrong={onStartWrong}
+            onExitQueue={onExitQueue}
           />
         )}
         {panel === "help" && <HelpPanel keymap={state.keymap} />}
@@ -1187,23 +1223,50 @@ function matchesReviewFilter(
 function RankedReview({
   entries,
   current,
+  queueActive,
   onChoose,
+  onStartWrong,
+  onExitQueue,
 }: {
   entries: RankedReviewEntry[];
   current: string | undefined;
+  queueActive: boolean;
   onChoose: (questionId: string) => void;
+  onStartWrong: (questionIds: string[]) => void;
+  onExitQueue: () => void;
 }): React.JSX.Element {
-  const [filter, setFilter] = useState<ReviewFilter>("all");
+  const [filter, setFilter] = useState<ReviewFilter>(() =>
+    entries.some((entry) => entry.wrong) ? "wrong" : "all",
+  );
   const attempted = entries.filter((entry) => entry.attempted).length;
-  const wrong = entries.filter((entry) => entry.wrong).length;
+  const wrongEntries = entries.filter((entry) => entry.wrong);
+  const wrong = wrongEntries.length;
   const due = entries.filter((entry) => entry.due).length;
   const visible = entries.filter((entry) => matchesReviewFilter(entry, filter));
   return (
     <section data-testid="ranked-review">
-      <h2>本地复习</h2>
+      <h2>错题集</h2>
       <p className="review-stats" data-testid="review-stats">
         已练 {attempted}/{entries.length} · 错题 {wrong} · 到期 {due}
       </p>
+      <div className="drill-actions">
+        <button
+          type="button"
+          className="drill-start"
+          data-testid="wrong-drive-start"
+          disabled={wrong === 0}
+          onClick={() =>
+            onStartWrong(wrongEntries.map((entry) => entry.questionId))
+          }
+        >
+          只刷错题（{wrong}）
+        </button>
+        {queueActive && (
+          <button type="button" onClick={onExitQueue}>
+            退出错题循环
+          </button>
+        )}
+      </div>
       <fieldset className="review-filters" aria-label="复习筛选">
         {REVIEW_FILTERS.map(({ id, label }) => (
           <button

@@ -101,6 +101,17 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
 
   await page.keyboard.press("Escape");
   await expect(review).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("command-layer")).toBeVisible();
+  await page.keyboard.press("KeyQ");
+  await expect(page.getByTestId("ranked-review")).toContainText("错题集");
+  await page.getByTestId("wrong-drive-start").click();
+  await expect(page.getByTestId("review-queue")).toHaveText("错题循环 1/1");
+  await page.keyboard.press("KeyJ");
+  await expect(page.getByTestId("review-queue")).toBeHidden();
+  await expect(page.getByTestId("question-position")).toHaveText("1/3");
+
   await page.keyboard.press("KeyJ");
   await expect(page.getByTestId("question-position")).toHaveText("2/3");
   await expect(page.locator("#position")).toHaveText("WFD 2/3");

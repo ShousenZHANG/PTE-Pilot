@@ -33,6 +33,7 @@ import {
   QuestionIndexer,
 } from "../firefly/question-indexer";
 import { rankLocally } from "../learning/ranking";
+import { queuePosition, stepQueue } from "../learning/review-queue";
 import { RuntimeClient } from "../runtime/runtime-client";
 import { DEFAULT_ALT_KEYMAP, isValidKeymap } from "./keyboard";
 
@@ -57,6 +58,7 @@ export interface CockpitViewState {
   marked: boolean;
   words: WordStatSummary[];
   rankedEntries: RankedReviewEntry[];
+  reviewQueue: { position: number; total: number } | null;
   keymap: Record<string, string>;
   fault: RuntimeFault | null;
 }
@@ -177,6 +179,7 @@ export class PracticeController extends EventTarget {
   #initializeGeneration = 0;
   #rankRequestGeneration = 0;
   #sessionWriteChain: Promise<void> = Promise.resolve();
+  #reviewQueue: string[] | null = null;
   #disposed = false;
   #state: CockpitViewState = {
     phase: "PROBING",
@@ -191,6 +194,7 @@ export class PracticeController extends EventTarget {
     marked: false,
     words: [],
     rankedEntries: [],
+    reviewQueue: null,
     keymap: { ...DEFAULT_ALT_KEYMAP },
     fault: null,
   };
@@ -212,9 +216,11 @@ export class PracticeController extends EventTarget {
   async initialize(preflight?: Promise<unknown>): Promise<void> {
     const generation = ++this.#initializeGeneration;
     const cleanup = this.teardownActivePorts();
+    this.#reviewQueue = null;
     this.patch({
       phase: "PROBING",
       siteStatus: "正在验证萤火虫页面",
+      reviewQueue: null,
       fault: null,
     });
     await cleanup;
@@ -488,6 +494,24 @@ export class PracticeController extends EventTarget {
     const epoch = this.#latestNavigationEpoch;
     const generation = this.#initializeGeneration;
     if (!navigation || !identity || !canNavigateFromPhase(this.#state.phase)) {
+      return;
+    }
+    // Wrong-question drive: next/previous walks the queue, not the site order.
+    if (this.#reviewQueue) {
+      const step = stepQueue(this.#reviewQueue, identity.questionId, kind);
+      if (step.kind === "hold") {
+        this.patch({ notice: "已经是错题集第一题" });
+        return;
+      }
+      if (step.kind === "finished") {
+        this.#reviewQueue = null;
+        this.patch({
+          reviewQueue: null,
+          notice: "错题集刷完一轮；已恢复正常切题",
+        });
+        return;
+      }
+      await this.navigateToQuestion(step.questionId);
       return;
     }
     this.patch({ phase: "NAVIGATING", notice: "", siteStatus: "正在切题" });
@@ -907,6 +931,47 @@ export class PracticeController extends EventTarget {
     }
   }
 
+  /*
+   * Wrong-question drive: pin next/previous to the given queue until the
+   * round completes. Only meaningful on a verified set because it rides on
+   * navigateToQuestion's index lookup.
+   */
+  async startWrongDrive(questionIds: string[]): Promise<boolean> {
+    const identity = this.#state.identity;
+    if (
+      !identity ||
+      this.#state.phase !== "COMMAND" ||
+      !canPersistPredictionEdition(identity.predictionEdition) ||
+      questionIds.length === 0
+    ) {
+      if (questionIds.length === 0) this.patch({ notice: "没有错题可刷" });
+      return false;
+    }
+    this.#reviewQueue = [...questionIds];
+    const position = queuePosition(this.#reviewQueue, identity.questionId);
+    this.patch({
+      reviewQueue: {
+        position: position ?? 1,
+        total: this.#reviewQueue.length,
+      },
+      notice: "错题循环开启；Enter/J 只在错题之间切换",
+    });
+    if (position !== null) {
+      // Already on a wrong question: stay and leave the command layer.
+      this.setCommand(false);
+      return true;
+    }
+    const first = this.#reviewQueue[0];
+    if (first) await this.navigateToQuestion(first);
+    return true;
+  }
+
+  exitWrongDrive(): void {
+    if (!this.#reviewQueue) return;
+    this.#reviewQueue = null;
+    this.patch({ reviewQueue: null, notice: "已退出错题循环" });
+  }
+
   async buildFullIndex(): Promise<void> {
     if (this.#sessionMode) {
       await this.buildVerifiedIndexFromSession();
@@ -1253,6 +1318,15 @@ export class PracticeController extends EventTarget {
       notice: manual ? "已跟随原网页切题" : "",
       siteStatus: "已同步",
       audioStatus: "EMPTY",
+      reviewQueue: this.#reviewQueue
+        ? {
+            position:
+              queuePosition(this.#reviewQueue, identity.questionId) ??
+              this.#state.reviewQueue?.position ??
+              1,
+            total: this.#reviewQueue.length,
+          }
+        : null,
       fault: null,
     });
     if (this.#state.indexStatus !== "COMPLETE") {

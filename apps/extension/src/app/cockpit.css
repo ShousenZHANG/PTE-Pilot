@@ -867,6 +867,20 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+[data-testid="ranked-review"] .drill-actions {
+  margin: 0 0 14px;
+}
+
+.queue-chip {
+  flex: 0 0 auto;
+  border-radius: 3px;
+  padding: 2px 9px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .review-filters {
   display: flex;
   gap: 8px;
