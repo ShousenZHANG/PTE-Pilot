@@ -1,7 +1,7 @@
-import type { PracticeMode, QuestionIdentity } from "../domain/types";
+import type { PracticeMode } from "../domain/types";
 
 export interface AudioSitePort {
-  readIdentity(): QuestionIdentity;
+  readQuestionIdFast(): string | null;
   siteAudioElements(): HTMLAudioElement[];
   playAudio(): void;
   pauseAudio(): void;
@@ -274,15 +274,20 @@ export class AudioBroker extends EventTarget {
     return this.#binding;
   }
 
+  /*
+   * Latency-critical guard: uses the cheap id read instead of a full page
+   * scan. A null read (transient DOM) trusts the binding — navigation
+   * always rebinds or invalidates, which is the primary anti-cross-question
+   * defence.
+   */
   private assertCurrent(binding: {
     questionId: string;
     navigationEpoch: number;
   }): void {
-    const current = this.#site.readIdentity();
-    if (
-      this.#binding !== binding ||
-      current.questionId !== binding.questionId
-    ) {
+    if (this.#binding !== binding)
+      throw new AudioBrokerError("audio:stale-binding");
+    const currentId = this.#site.readQuestionIdFast();
+    if (currentId !== null && currentId !== binding.questionId) {
       throw new AudioBrokerError("audio:stale-binding");
     }
   }

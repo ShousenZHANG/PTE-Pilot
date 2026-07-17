@@ -42,7 +42,7 @@ class FakeAudioElement extends EventTarget {
 
 function siteFixture(overrides: Partial<AudioSitePort> = {}): AudioSitePort {
   return {
-    readIdentity: () => identity,
+    readQuestionIdFast: () => identity.questionId,
     siteAudioElements: () => [],
     playAudio: () => undefined,
     pauseAudio: () => undefined,
@@ -132,7 +132,7 @@ describe("AudioBroker direct element control", () => {
     let currentQuestion = identity.questionId;
     const broker = new AudioBroker(
       siteFixture({
-        readIdentity: () => ({ ...identity, questionId: currentQuestion }),
+        readQuestionIdFast: () => currentQuestion,
         siteAudioElements: () => [element as unknown as HTMLAudioElement],
       }),
     );

@@ -382,8 +382,9 @@ export function Cockpit(): React.JSX.Element | null {
       }
     };
     update();
-    if (state.audioStatus !== "PLAYING") return;
-    const interval = setInterval(update, 200);
+    if (state.audioStatus !== "PLAYING" && state.audioStatus !== "BUFFERING")
+      return;
+    const interval = setInterval(update, 100);
     return () => clearInterval(interval);
   }, [state.audioStatus, open]);
 
@@ -602,8 +603,7 @@ export function Cockpit(): React.JSX.Element | null {
             </strong>
             <span className="audio-time" ref={audioTimeRef} />
             <span className="key-hints" aria-hidden="true">
-              <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd> 播放 / 暂停
-              <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd> 重播
+              <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd> 从头重播
             </span>
           </div>
           <div className="audio-track" aria-hidden="true">

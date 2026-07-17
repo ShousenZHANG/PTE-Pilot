@@ -628,6 +628,32 @@ export class FireflyDomAdapter {
     return Array.from(this.#document.querySelectorAll("audio"));
   }
 
+  /*
+   * Cheap question-identity read for latency-critical paths (audio). Only
+   * the explicit id attributes are consulted — no full-page position scan —
+   * and ambiguity degrades to null instead of throwing.
+   */
+  readQuestionIdFast(): string | null {
+    const ids = Array.from(
+      this.#document.querySelectorAll<HTMLElement>(
+        "[data-question-id]:not(option), [data-exercise-id]:not(option)",
+      ),
+    )
+      .filter(isVisible)
+      .filter(outsideTransientOverlays)
+      .map((element) =>
+        parseQuestionId(
+          element.dataset.questionId ??
+            element.dataset.exerciseId ??
+            element.textContent ??
+            "",
+        ),
+      )
+      .filter((value): value is string => value !== null);
+    const unique = [...new Set(ids)];
+    return unique.length === 1 ? (unique[0] ?? null) : null;
+  }
+
   observeQuestionChanges(
     callback: (identity: QuestionIdentity) => void,
   ): () => void {
