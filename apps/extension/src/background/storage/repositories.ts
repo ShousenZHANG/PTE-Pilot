@@ -16,6 +16,7 @@ import {
   UserSettingsSchema,
   type WordStatSummary,
 } from "@pte-pilot/contracts";
+import { scheduleNextReview } from "../../learning/spaced-repetition";
 import type {
   PtePilotDb,
   QuestionProgressRecord,
@@ -36,16 +37,6 @@ const wordKey = (error: AttemptEvent["errors"][number]): string =>
     error.expected.toLocaleLowerCase("en-AU"),
     error.actual.toLocaleLowerCase("en-AU"),
   ].join("\u0000");
-
-function nextDueAt(attempt: AttemptEvent): string {
-  const delay =
-    attempt.accuracy === 1
-      ? 24 * HOUR_MS
-      : attempt.accuracy >= 0.8
-        ? 6 * HOUR_MS
-        : 30 * 60 * 1_000;
-  return new Date(Date.parse(attempt.completedAt) + delay).toISOString();
-}
 
 function requireTimestamp(value: string): number {
   const timestamp = Date.parse(value);
@@ -135,6 +126,11 @@ export class CockpitRepositories {
         await this.db.attempts.add(attempt);
         const key = progressKey(predictionEdition, attempt.questionId);
         const current = await this.db.questionProgress.get(key);
+        const schedule = scheduleNextReview({
+          accuracy: attempt.accuracy,
+          completedAt: attempt.completedAt,
+          previousStreak: current?.streak ?? 0,
+        });
         const progress: QuestionProgressRecord = {
           predictionEdition,
           questionId: attempt.questionId,
@@ -142,8 +138,9 @@ export class CockpitRepositories {
           errorCount: (current?.errorCount ?? 0) + attempt.errors.length,
           lastAccuracy: attempt.accuracy,
           lastAttemptAt: attempt.completedAt,
-          dueAt: nextDueAt(attempt),
+          dueAt: schedule.dueAt,
           marked: current?.marked ?? false,
+          streak: schedule.streak,
         };
         await this.db.questionProgress.put(progress);
 
@@ -187,6 +184,7 @@ export class CockpitRepositories {
           lastAttemptAt: current?.lastAttemptAt ?? null,
           dueAt: current?.dueAt ?? null,
           marked,
+          streak: current?.streak ?? 0,
         });
         await this.incrementLearnerStateVersion();
       },

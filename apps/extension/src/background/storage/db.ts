@@ -25,6 +25,8 @@ export interface QuestionProgressRecord {
   lastAttemptAt: string | null;
   dueAt: string | null;
   marked: boolean;
+  /** Consecutive perfect attempts; optional because pre-existing rows lack it. */
+  streak?: number;
 }
 
 export interface SessionRecord {

@@ -96,6 +96,59 @@ describe("CockpitRepositories", () => {
     expect(await db.questionProgress.count()).toBe(1);
   });
 
+  test("graduates the review interval on perfect streaks and resets on a lapse", async () => {
+    const key = ["yc-2026-w29", attempt.questionId] as const;
+    const perfectFirst: AttemptEvent = {
+      ...attempt,
+      attemptId: "11111111-1111-4111-8111-111111111111",
+      accuracy: 1,
+      errors: [],
+      completedAt: "2026-07-15T10:00:00.000Z",
+    };
+    await repository.commitAttempt("yc-2026-w29", perfectFirst);
+    let progress = await db.questionProgress.get(key);
+    expect(progress?.streak).toBe(1);
+    expect(progress?.dueAt).toBe("2026-07-16T10:00:00.000Z");
+
+    const perfectSecond: AttemptEvent = {
+      ...perfectFirst,
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      completedAt: "2026-07-16T10:00:00.000Z",
+    };
+    await repository.commitAttempt("yc-2026-w29", perfectSecond);
+    progress = await db.questionProgress.get(key);
+    expect(progress?.streak).toBe(2);
+    expect(progress?.dueAt).toBe("2026-07-18T10:00:00.000Z");
+
+    const lapse: AttemptEvent = {
+      ...attempt,
+      attemptId: "33333333-3333-4333-8333-333333333333",
+      accuracy: 0.5,
+      completedAt: "2026-07-18T10:00:00.000Z",
+    };
+    await repository.commitAttempt("yc-2026-w29", lapse);
+    progress = await db.questionProgress.get(key);
+    expect(progress?.streak).toBe(0);
+    expect(progress?.dueAt).toBe("2026-07-18T10:30:00.000Z");
+  });
+
+  test("marking preserves the review streak", async () => {
+    const perfect: AttemptEvent = {
+      ...attempt,
+      attemptId: "44444444-4444-4444-8444-444444444444",
+      accuracy: 1,
+      errors: [],
+    };
+    await repository.commitAttempt("yc-2026-w29", perfect);
+    await repository.setMarked("yc-2026-w29", attempt.questionId, true);
+    const progress = await db.questionProgress.get([
+      "yc-2026-w29",
+      attempt.questionId,
+    ] as const);
+    expect(progress?.marked).toBe(true);
+    expect(progress?.streak).toBe(1);
+  });
+
   test("is idempotent for the same attemptId", async () => {
     await repository.commitAttempt("yc-2026-w29", attempt);
     await repository.commitAttempt("yc-2026-w29", attempt);
