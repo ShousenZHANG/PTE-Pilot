@@ -13,7 +13,9 @@ export type { AudioCaptureHandle } from "../runtime/audio-messages";
 
 export interface AudioSitePort {
   readIdentity(): QuestionIdentity;
-  click(name: "play" | "pause"): void;
+  playAudio(): void;
+  pauseAudio(): void;
+  restartAudio(): void;
   visibleAudioElements(): HTMLAudioElement[];
 }
 
@@ -39,6 +41,7 @@ export class AudioBroker extends EventTarget {
   #mode: PracticeMode = "practice";
   #state: AudioState = "EMPTY";
   #examStartConsumed = false;
+  #captureVerified = false;
   #playOperation: Promise<void> | null = null;
 
   constructor(
@@ -65,6 +68,7 @@ export class AudioBroker extends EventTarget {
       captureToken: this.#createToken(),
     };
     this.#examStartConsumed = false;
+    this.#captureVerified = false;
     this.setState("EMPTY");
   }
 
@@ -94,18 +98,33 @@ export class AudioBroker extends EventTarget {
         this.setState("PAUSED");
         return;
       }
+      if (!native && this.#state === "PLAYING") {
+        this.#site.pauseAudio();
+        this.assertCurrent(binding);
+        this.setState("PAUSED");
+        return;
+      }
       if (this.#mode === "exam" && this.#examStartConsumed) {
         throw new Error("audio:exam-play-consumed");
+      }
+
+      if (this.#captureVerified) {
+        if (native?.paused) await native.play();
+        else this.#site.playAudio();
+        this.assertCurrent(binding);
+        this.setState("PLAYING");
+        return;
       }
 
       this.setState("RESOLVING");
       const handle = await this.#capture.begin(binding);
       this.assertCurrent(binding);
       if (native?.paused) await native.play();
-      else this.#site.click("play");
+      else this.#site.playAudio();
       const observation = await handle.observation;
       this.assertObservation(binding, handle, observation);
       this.assertCurrent(binding);
+      this.#captureVerified = true;
       if (this.#mode === "exam") this.#examStartConsumed = true;
       this.setState("PLAYING");
     } catch (error) {
@@ -125,7 +144,8 @@ export class AudioBroker extends EventTarget {
     this.assertCurrent(binding);
     const native = this.#site.visibleAudioElements()[0];
     if (native && !native.paused) native.pause();
-    else this.#site.click("pause");
+    else this.#site.pauseAudio();
+    this.assertCurrent(binding);
     this.setState("PAUSED");
   }
 
@@ -135,12 +155,32 @@ export class AudioBroker extends EventTarget {
     if (this.#mode === "exam" && this.#examStartConsumed) {
       throw new AudioBrokerError("audio:exam-play-consumed");
     }
-    const native = this.#site.visibleAudioElements()[0];
-    if (native) {
-      if (!native.paused) native.pause();
-      native.currentTime = 0;
+    try {
+      const native = this.#site.visibleAudioElements()[0];
+      if (!this.#captureVerified) {
+        if (native) {
+          if (!native.paused) native.pause();
+          native.currentTime = 0;
+        }
+        await this.play();
+        return;
+      }
+      if (native) {
+        if (!native.paused) native.pause();
+        native.currentTime = 0;
+        await native.play();
+      } else {
+        this.#site.restartAudio();
+      }
+      this.assertCurrent(binding);
+      this.setState("PLAYING");
+    } catch (error) {
+      if (this.#binding === binding) {
+        this.failClosedPlayback();
+        this.setState("AUDIO_ERROR");
+      }
+      throw toAudioError(error);
     }
-    await this.play();
   }
 
   dispose(): void {
@@ -151,6 +191,7 @@ export class AudioBroker extends EventTarget {
     if (this.#binding) void this.#capture.cancel(this.#binding);
     this.stopNativeAudio();
     this.#binding = null;
+    this.#captureVerified = false;
     this.setState("EMPTY");
   }
 
@@ -198,7 +239,7 @@ export class AudioBroker extends EventTarget {
   private failClosedPlayback(): void {
     this.stopNativeAudio();
     try {
-      this.#site.click("pause");
+      this.#site.pauseAudio();
     } catch {
       // Native player may expose only an audio element. It is already stopped.
     }

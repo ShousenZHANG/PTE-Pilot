@@ -3,7 +3,6 @@ packages:
   - "packages/*"
   - "tests/*"
 allowBuilds:
-  better-sqlite3: true
   esbuild: true
   spawn-sync: true
 minimumReleaseAgeExclude:

@@ -161,23 +161,4 @@ describe("practice machine", () => {
       }),
     ).toBe(epochThree);
   });
-
-  test("Hermes offline never blocks local answering", () => {
-    const answering = transition(createInitialMachineState(), {
-      type: "QUESTION_READY",
-      question,
-      navigationEpoch: NavigationEpochSchema.parse(1),
-      restoredDraft: "",
-    });
-    const offline = transition(answering, {
-      type: "FAULTED",
-      fault: {
-        code: "HERMES_OFFLINE",
-        message: "offline",
-        recoverable: true,
-      },
-    });
-    expect(offline.runtime.phase).toBe("ANSWERING");
-    expect(offline.runtime.hermesOnline).toBe(false);
-  });
 });

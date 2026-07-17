@@ -5,8 +5,6 @@ node_modules/
 coverage/
 test-results/
 playwright-report/
-apps/gateway/data/
-apps/gateway/dist/
 packages/*/dist/
 .env
 .env.*
@@ -16,3 +14,4 @@ packages/*/dist/
 *.sqlite-wal
 apps/extension/.wxt/
 apps/extension/.output/
+PTE-Pilot-Chrome-latest/

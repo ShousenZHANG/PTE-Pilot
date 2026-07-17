@@ -112,6 +112,9 @@ test("shows fault help for Shift+/ and clears it before recovery actions", async
   await expect(page.getByTestId("help-panel")).toBeVisible();
   await page.keyboard.press("KeyR");
   await expect(page.getByTestId("help-panel")).toBeHidden();
+  await expect(page.getByTestId("practice-state")).toContainText(
+    "AUTH_REQUIRED",
+  );
 
   await page.keyboard.press("Shift+Slash");
   await expect(page.getByTestId("help-panel")).toBeVisible();

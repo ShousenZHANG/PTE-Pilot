@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FireflyDomAdapter,
   isSequentialQuestionPositionList,
@@ -6,6 +6,63 @@ import {
   PredictionEditionOverrideState,
   verifiedPredictionEdition,
 } from "./dom-adapter";
+
+class FakeElement {
+  hidden = false;
+  parentElement: FakeElement | null = null;
+  disabled = false;
+  clicked = 0;
+  readonly #queries = new Map<string, FakeElement[]>();
+  readonly #attributes = new Map<string, string>();
+
+  constructor(
+    readonly className: string,
+    readonly width = 0,
+    readonly height = 0,
+  ) {}
+
+  setQuery(selector: string, elements: FakeElement[]): void {
+    this.#queries.set(selector, elements);
+    for (const element of elements) element.parentElement ??= this;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.#attributes.set(name, value);
+  }
+
+  querySelectorAll(selector: string): FakeElement[] {
+    return this.#queries.get(selector) ?? [];
+  }
+
+  getAttribute(name: string): string | null {
+    return this.#attributes.get(name) ?? null;
+  }
+
+  getBoundingClientRect(): DOMRect {
+    return {
+      width: this.width,
+      height: this.height,
+    } as DOMRect;
+  }
+
+  click(): void {
+    this.clicked += 1;
+  }
+}
+
+function installFakeDom(): void {
+  vi.stubGlobal("HTMLElement", FakeElement);
+  vi.stubGlobal("HTMLInputElement", FakeElement);
+  vi.stubGlobal("getComputedStyle", () => ({
+    visibility: "visible",
+    display: "block",
+    opacity: "1",
+  }));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("FireflyDomAdapter prediction edition probe guard", () => {
   it("returns the bootstrap diagnostic while the override is provisional", () => {
@@ -55,6 +112,142 @@ describe("FireflyDomAdapter prediction edition probe guard", () => {
         .map((selector) => selector.trim())
         .includes("li"),
     ).toBe(true);
+  });
+});
+
+describe("FireflyDomAdapter APlayer controls", () => {
+  it("advertises Play when the active question uses hidden APlayer controls", () => {
+    installFakeDom();
+    const player = new FakeElement("aplayer");
+    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
+    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
+    const input = new FakeElement("answer-input", 300, 80);
+    const controls = [
+      ["Score", "score"],
+      ["Answer", "answer"],
+      ["Previous", "previous"],
+      ["Next", "next"],
+      ["Redo", "redo"],
+    ].map(([label, className]) => {
+      const control = new FakeElement(className ?? "", 80, 28);
+      control.setAttribute("aria-label", label ?? "");
+      return control;
+    });
+    player.setQuery(".aplayer-bar-wrap", [progress]);
+    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
+    const document = {
+      querySelectorAll(selector: string) {
+        if (selector === ".aplayer") return [player];
+        if (selector === "textarea") return [input];
+        if (
+          selector ===
+          "button, [role='button'], input[type='button'], input[type='submit']"
+        )
+          return controls;
+        return [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+
+    expect(adapter.capabilities().play).toBe(true);
+  });
+
+  it("drives the hidden APlayer play control, not the display-only Play div", () => {
+    installFakeDom();
+    const player = new FakeElement("aplayer");
+    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
+    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
+    const displayOnly = new FakeElement("audio-pause-btn", 80, 28);
+    player.setQuery(".aplayer-bar-wrap", [progress]);
+    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
+    const document = {
+      querySelectorAll(selector: string) {
+        if (selector === ".aplayer") return [player];
+        if (selector === ".audio-pause-btn") return [displayOnly];
+        return [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+    const playAudio = (adapter as unknown as { playAudio?: () => void })
+      .playAudio;
+
+    expect(playAudio).toBeTypeOf("function");
+    playAudio?.call(adapter);
+    expect(hiddenPlay.clicked).toBe(1);
+    expect(displayOnly.clicked).toBe(0);
+  });
+
+  it("drives the hidden APlayer pause control", () => {
+    installFakeDom();
+    const player = new FakeElement("aplayer");
+    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
+    const hiddenPause = new FakeElement("aplayer-button aplayer-pause");
+    player.setQuery(".aplayer-bar-wrap", [progress]);
+    player.setQuery(".aplayer-button.aplayer-pause", [hiddenPause]);
+    const document = {
+      querySelectorAll(selector: string) {
+        return selector === ".aplayer" ? [player] : [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+    const pauseAudio = (adapter as unknown as { pauseAudio?: () => void })
+      .pauseAudio;
+
+    expect(pauseAudio).toBeTypeOf("function");
+    pauseAudio?.call(adapter);
+    expect(hiddenPause.clicked).toBe(1);
+  });
+
+  it("restarts the one-item APlayer and resumes it when paused", () => {
+    installFakeDom();
+    const player = new FakeElement("aplayer");
+    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
+    const listItem = new FakeElement("aplayer-list-item");
+    const back = new FakeElement("aplayer-icon aplayer-icon-back");
+    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
+    player.setQuery(".aplayer-bar-wrap", [progress]);
+    player.setQuery(".aplayer-list li", [listItem]);
+    player.setQuery(".aplayer-icon-back", [back]);
+    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
+    const document = {
+      querySelectorAll(selector: string) {
+        return selector === ".aplayer" ? [player] : [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+    const restartAudio = (adapter as unknown as { restartAudio?: () => void })
+      .restartAudio;
+
+    expect(restartAudio).toBeTypeOf("function");
+    restartAudio?.call(adapter);
+    expect(back.clicked).toBe(1);
+    expect(hiddenPlay.clicked).toBe(1);
+  });
+
+  it("refuses APlayer replay when playlist ownership is ambiguous", () => {
+    installFakeDom();
+    const player = new FakeElement("aplayer");
+    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
+    const back = new FakeElement("aplayer-icon aplayer-icon-back");
+    player.setQuery(".aplayer-bar-wrap", [progress]);
+    player.setQuery(".aplayer-list li", [
+      new FakeElement("aplayer-list-item"),
+      new FakeElement("aplayer-list-item"),
+    ]);
+    player.setQuery(".aplayer-icon-back", [back]);
+    const document = {
+      querySelectorAll(selector: string) {
+        return selector === ".aplayer" ? [player] : [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+    const restartAudio = (adapter as unknown as { restartAudio?: () => void })
+      .restartAudio;
+
+    expect(() => restartAudio?.call(adapter)).toThrow(
+      "audio:playlist:ambiguous",
+    );
+    expect(back.clicked).toBe(0);
   });
 });
 

@@ -1,12 +1,9 @@
 import {
   type AttemptEvent,
   type DraftCheckpoint,
-  type GatewayHealth,
   type IndexedQuestion,
   type IndexSnapshot,
   type RankCandidateSnapshot,
-  type RankRequest,
-  type RankResponse,
   type RestoredSession,
   type RuntimeRequest,
   RuntimeRequestSchema,
@@ -161,49 +158,6 @@ export class RuntimeClient {
       limit,
     });
     return assertAction(response, "storage/listWordStats").words;
-  }
-
-  async gatewayHealth(): Promise<GatewayHealth | null> {
-    try {
-      const response = await this.send({
-        requestId: crypto.randomUUID(),
-        action: "gateway/health",
-      });
-      return assertAction(response, "gateway/health").health;
-    } catch {
-      return null;
-    }
-  }
-
-  async pairGateway(pairingCode: string): Promise<GatewayHealth> {
-    const response = await this.send({
-      requestId: crypto.randomUUID(),
-      action: "gateway/pair",
-      pairingCode,
-    });
-    return assertAction(response, "gateway/pair").health;
-  }
-
-  async syncGateway(): Promise<{ acknowledged: number; pending: number }> {
-    const response = await this.send({
-      requestId: crypto.randomUUID(),
-      action: "gateway/sync",
-    });
-    const result = assertAction(response, "gateway/sync");
-    return { acknowledged: result.acknowledged, pending: result.pending };
-  }
-
-  async rank(
-    predictionEdition: string,
-    request: RankRequest,
-  ): Promise<RankResponse> {
-    const response = await this.send({
-      requestId: crypto.randomUUID(),
-      action: "gateway/rank",
-      predictionEdition,
-      request,
-    });
-    return assertAction(response, "gateway/rank").response;
   }
 
   async beginAudioCapture(

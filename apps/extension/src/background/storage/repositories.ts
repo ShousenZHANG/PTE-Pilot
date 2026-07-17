@@ -1,10 +1,6 @@
 import {
   type AttemptEvent,
   AttemptEventSchema,
-  type BatchUpsertRequest,
-  BatchUpsertRequestSchema,
-  type BatchUpsertResponse,
-  BatchUpsertResponseSchema,
   type CandidateFact,
   type DraftCheckpoint,
   DraftCheckpointSchema,
@@ -21,7 +17,6 @@ import {
   type WordStatSummary,
 } from "@pte-pilot/contracts";
 import type {
-  OutboxRecord,
   PtePilotDb,
   QuestionProgressRecord,
   SessionRecord,
@@ -29,8 +24,6 @@ import type {
 } from "./db";
 
 const HOUR_MS = 60 * 60 * 1_000;
-const LEASE_MS = 30_000;
-const MAX_BACKOFF_MS = 60_000;
 
 const progressKey = (
   predictionEdition: string,
@@ -58,19 +51,6 @@ function requireTimestamp(value: string): number {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) throw new Error("invalid timestamp");
   return timestamp;
-}
-
-function retryRecord(row: OutboxRecord, nowMs: number): OutboxRecord {
-  const retryCount = row.retryCount + 1;
-  const delay = Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** retryCount);
-  return {
-    ...row,
-    batchId: null,
-    status: "pending",
-    retryCount,
-    nextAttemptAt: new Date(nowMs + delay).toISOString(),
-    leaseExpiresAt: null,
-  };
 }
 
 export class CockpitRepositories {
@@ -137,7 +117,6 @@ export class CockpitRepositories {
       "rw",
       [
         this.db.attempts,
-        this.db.outbox,
         this.db.wordStats,
         this.db.questionProgress,
         this.db.meta,
@@ -182,14 +161,6 @@ export class CockpitRepositories {
           await this.db.wordStats.put(word);
         }
 
-        await this.db.outbox.add({
-          attemptId: attempt.attemptId,
-          batchId: null,
-          status: "pending",
-          retryCount: 0,
-          nextAttemptAt: attempt.completedAt,
-          leaseExpiresAt: null,
-        });
         await this.incrementLearnerStateVersion();
       },
     );
@@ -292,206 +263,6 @@ export class CockpitRepositories {
         };
       },
     );
-  }
-
-  async leaseOutbox(
-    batchId: string,
-    limit: number,
-    now: string,
-  ): Promise<BatchUpsertRequest | null> {
-    const nowMs = requireTimestamp(now);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      throw new Error("outbox lease limit must be between 1 and 100");
-    }
-    return this.db.transaction(
-      "rw",
-      [this.db.outbox, this.db.attempts],
-      async () => {
-        const expired = (
-          await this.db.outbox.where("status").equals("inflight").toArray()
-        ).filter(
-          (row) =>
-            row.leaseExpiresAt !== null &&
-            requireTimestamp(row.leaseExpiresAt) <= nowMs,
-        );
-        for (const row of expired) {
-          await this.db.outbox.put({
-            ...retryRecord(row, nowMs),
-            nextAttemptAt: now,
-          });
-        }
-
-        const rows = (
-          await this.db.outbox.where("status").equals("pending").toArray()
-        )
-          .filter((row) => requireTimestamp(row.nextAttemptAt) <= nowMs)
-          .sort(
-            (left, right) =>
-              left.nextAttemptAt.localeCompare(right.nextAttemptAt) ||
-              left.attemptId.localeCompare(right.attemptId, "en"),
-          )
-          .slice(0, limit);
-        if (rows.length === 0) return null;
-
-        const leaseExpiresAt = new Date(nowMs + LEASE_MS).toISOString();
-        for (const row of rows) {
-          await this.db.outbox.put({
-            ...row,
-            status: "inflight",
-            batchId,
-            leaseExpiresAt,
-          });
-        }
-
-        const events = await this.db.attempts.bulkGet(
-          rows.map((row) => row.attemptId),
-        );
-        if (events.some((event) => event === undefined)) {
-          throw new Error("outbox references missing attempt");
-        }
-        return BatchUpsertRequestSchema.parse({
-          batchId,
-          events: events.map((event) => AttemptEventSchema.parse(event)),
-        });
-      },
-    );
-  }
-
-  async ackOutbox(
-    input: BatchUpsertResponse,
-    now = new Date(this.clock()).toISOString(),
-  ): Promise<void> {
-    const response = BatchUpsertResponseSchema.parse(input);
-    const nowMs = requireTimestamp(now);
-    await this.db.transaction(
-      "rw",
-      [this.db.attempts, this.db.outbox, this.db.meta],
-      async () => {
-        const rows = await this.db.outbox
-          .where("batchId")
-          .equals(response.batchId)
-          .toArray();
-        if (rows.length === 0) return;
-        const acknowledged = new Set(response.ackedAttemptIds);
-        const currentProjection = (
-          await this.db.meta.get("projection-instance-id")
-        )?.stringValue;
-        if (
-          currentProjection !== undefined &&
-          currentProjection !== response.projectionInstanceId
-        ) {
-          const attempts = await this.db.attempts.toArray();
-          await this.db.outbox.clear();
-          const replay = attempts
-            .filter((attempt) => !acknowledged.has(attempt.attemptId))
-            .map((attempt) => ({
-              attemptId: attempt.attemptId,
-              batchId: null,
-              status: "pending" as const,
-              retryCount: 0,
-              nextAttemptAt: now,
-              leaseExpiresAt: null,
-            }));
-          if (replay.length > 0) await this.db.outbox.bulkPut(replay);
-          await this.db.meta.bulkPut([
-            {
-              id: "projection-instance-id",
-              stringValue: response.projectionInstanceId,
-            },
-            {
-              id: "projection-version",
-              numberValue: response.projectionVersion,
-            },
-          ]);
-          return;
-        }
-        for (const row of rows) {
-          if (acknowledged.has(row.attemptId)) {
-            await this.db.outbox.delete(row.attemptId);
-          } else {
-            await this.db.outbox.put(retryRecord(row, nowMs));
-          }
-        }
-        await this.db.meta.bulkPut([
-          {
-            id: "projection-instance-id",
-            stringValue: response.projectionInstanceId,
-          },
-          { id: "projection-version", numberValue: response.projectionVersion },
-        ]);
-      },
-    );
-  }
-
-  async releaseOutbox(
-    batchId: string,
-    now = new Date(this.clock()).toISOString(),
-  ): Promise<void> {
-    const nowMs = requireTimestamp(now);
-    await this.db.transaction("rw", this.db.outbox, async () => {
-      const rows = await this.db.outbox
-        .where("batchId")
-        .equals(batchId)
-        .toArray();
-      for (const row of rows) {
-        await this.db.outbox.put(retryRecord(row, nowMs));
-      }
-    });
-  }
-
-  countOutbox(): Promise<number> {
-    return this.db.outbox.count();
-  }
-
-  async nextOutboxWakeAt(): Promise<string | null> {
-    const rows = await this.db.outbox.toArray();
-    let next: { timestamp: number; value: string } | null = null;
-    for (const row of rows) {
-      const value =
-        row.status === "pending" ? row.nextAttemptAt : row.leaseExpiresAt;
-      if (value === null) continue;
-      const timestamp = requireTimestamp(value);
-      if (!next || timestamp < next.timestamp) next = { timestamp, value };
-    }
-    return next?.value ?? null;
-  }
-
-  async requeueAllAttemptsForProjection(
-    projectionInstanceId: string,
-    now = new Date(this.clock()).toISOString(),
-  ): Promise<void> {
-    requireTimestamp(now);
-    await this.db.transaction(
-      "rw",
-      [this.db.attempts, this.db.outbox, this.db.meta],
-      async () => {
-        const current = (await this.db.meta.get("projection-instance-id"))
-          ?.stringValue;
-        if (current === projectionInstanceId) return;
-        const attempts = await this.db.attempts.toArray();
-        await this.db.outbox.bulkPut(
-          attempts.map((attempt) => ({
-            attemptId: attempt.attemptId,
-            batchId: null,
-            status: "pending" as const,
-            retryCount: 0,
-            nextAttemptAt: now,
-            leaseExpiresAt: null,
-          })),
-        );
-        await this.db.meta.bulkPut([
-          { id: "projection-instance-id", stringValue: projectionInstanceId },
-          { id: "projection-version", numberValue: 0 },
-        ]);
-      },
-    );
-  }
-
-  rebuildOutboxForProjection(
-    projectionInstanceId: string,
-    now?: string,
-  ): Promise<void> {
-    return this.requeueAllAttemptsForProjection(projectionInstanceId, now);
   }
 
   async loadIndexSnapshot(

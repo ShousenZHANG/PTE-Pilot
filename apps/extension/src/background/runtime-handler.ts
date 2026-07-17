@@ -7,11 +7,6 @@ import {
   RuntimeResponseSchema,
 } from "@pte-pilot/contracts";
 import { isSupportedFireflyExerciseUrl } from "../firefly/url-policy";
-import {
-  GatewayHttpError,
-  type PtePilotGatewayClient,
-} from "./gateway-http-client";
-import type { OutboxSynchronizer } from "./outbox-synchronizer";
 import type { CockpitRepositories } from "./storage/repositories";
 
 export interface RuntimeSender {
@@ -22,8 +17,6 @@ export interface RuntimeSender {
 export interface RuntimeHandlerDependencies {
   extensionId: string;
   repository: CockpitRepositories;
-  gateway: PtePilotGatewayClient;
-  synchronizer: OutboxSynchronizer;
 }
 
 function isAllowedSender(sender: RuntimeSender, extensionId: string): boolean {
@@ -37,7 +30,6 @@ function isAllowedSender(sender: RuntimeSender, extensionId: string): boolean {
 
 function failureReason(error: unknown): RuntimeFailureReason {
   if (error instanceof InvalidRuntimeRequestError) return "invalid-request";
-  if (error instanceof GatewayHttpError) return error.reason;
   return "storage-failure";
 }
 
@@ -50,7 +42,6 @@ function predictionEditions(request: RuntimeRequest): readonly string[] {
     case "storage/setMarked":
     case "storage/getRankCandidates":
     case "storage/loadIndexSnapshot":
-    case "gateway/rank":
       return [request.predictionEdition];
     case "storage/saveDraft":
       return [request.draft.predictionEdition];
@@ -112,7 +103,7 @@ async function execute(
   request: RuntimeRequest,
   dependencies: RuntimeHandlerDependencies,
 ): Promise<RuntimeResponse> {
-  const { repository, gateway, synchronizer } = dependencies;
+  const { repository } = dependencies;
   switch (request.action) {
     case "storage/loadDraft":
       return {
@@ -132,7 +123,6 @@ async function execute(
         request.predictionEdition,
         request.attempt,
       );
-      synchronizer.schedule();
       return { requestId: request.requestId, ok: true, action: request.action };
     case "storage/setMarked":
       await repository.setMarked(
@@ -192,59 +182,7 @@ async function execute(
         action: request.action,
         words: await repository.listWordStats(request.limit),
       };
-    case "gateway/health":
-      return {
-        requestId: request.requestId,
-        ok: true,
-        action: request.action,
-        health: await gateway.health(),
-      };
-    case "gateway/pair": {
-      const health = await gateway.pair(request.pairingCode);
-      await repository.requeueAllAttemptsForProjection(
-        health.projectionInstanceId,
-      );
-      synchronizer.schedule();
-      return {
-        requestId: request.requestId,
-        ok: true,
-        action: request.action,
-        paired: true,
-        health,
-      };
-    }
-    case "gateway/sync": {
-      const result = await synchronizer.drain();
-      return {
-        requestId: request.requestId,
-        ok: true,
-        action: request.action,
-        ...result,
-      };
-    }
-    case "gateway/rank": {
-      const { snapshot, questions } = await repository.loadIndexSnapshot(
-        request.predictionEdition,
-      );
-      const snapshotIds = new Set(snapshot?.orderedQuestionIds ?? []);
-      const allowed = new Set(
-        questions
-          .filter((question) => snapshotIds.has(question.questionId))
-          .map((question) => question.questionId),
-      );
-      if (
-        request.request.candidates.some(
-          (candidate) => !allowed.has(candidate.questionId),
-        )
-      ) {
-        throw new InvalidRuntimeRequestError("rank candidate is not indexed");
-      }
-      return {
-        requestId: request.requestId,
-        ok: true,
-        action: request.action,
-        response: await gateway.rank(request.request),
-      };
-    }
+    default:
+      throw new InvalidRuntimeRequestError("unsupported runtime action");
   }
 }

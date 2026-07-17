@@ -179,6 +179,13 @@ function routeForPhase(
     return { action: null, consume: false };
   }
 
+  if (context.phase === "DESYNC" && onlyAlt(event)) {
+    if (lower === keymap.next?.toLocaleLowerCase("en-AU"))
+      return action("next");
+    if (lower === keymap.previous?.toLocaleLowerCase("en-AU"))
+      return action("previous");
+  }
+
   if (new Set(["AUTH_REQUIRED", "DESYNC", "SITE_CHANGED"]).has(context.phase)) {
     if (!noModifiers(event) && !(event.key === "?" && event.shiftKey))
       return { action: null, consume: false };

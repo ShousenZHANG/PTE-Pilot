@@ -2,11 +2,8 @@ import { z } from "zod";
 import {
   AttemptErrorSchema,
   AttemptEventSchema,
-  GatewayHealthSchema,
   RankCandidateSchema,
-  RankRequestSchema,
-  RankResponseSchema,
-} from "./gateway";
+} from "./learning";
 import {
   IndexedQuestionSchema,
   IndexSnapshotSchema,
@@ -140,20 +137,6 @@ export const RuntimeRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("storage/listWordStats"),
     limit: z.number().int().positive().max(500),
   }),
-  request({ action: z.literal("gateway/health") }),
-  request({
-    action: z.literal("gateway/pair"),
-    pairingCode: z
-      .string()
-      .trim()
-      .regex(/^[A-HJ-NP-Z2-9]{12}$/iu),
-  }),
-  request({ action: z.literal("gateway/sync") }),
-  request({
-    action: z.literal("gateway/rank"),
-    predictionEdition: PredictionEditionSchema,
-    request: RankRequestSchema,
-  }),
 ]);
 export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 
@@ -194,33 +177,11 @@ export const RuntimeSuccessSchema = z.discriminatedUnion("action", [
     action: z.literal("storage/listWordStats"),
     words: z.array(WordStatSummarySchema),
   }),
-  success({
-    action: z.literal("gateway/health"),
-    health: GatewayHealthSchema,
-  }),
-  success({
-    action: z.literal("gateway/pair"),
-    paired: z.literal(true),
-    health: GatewayHealthSchema,
-  }),
-  success({
-    action: z.literal("gateway/sync"),
-    acknowledged: z.number().int().nonnegative(),
-    pending: z.number().int().nonnegative(),
-  }),
-  success({
-    action: z.literal("gateway/rank"),
-    response: RankResponseSchema,
-  }),
 ]);
 export type RuntimeSuccess = z.infer<typeof RuntimeSuccessSchema>;
 
 export const RuntimeFailureReasonSchema = z.enum([
-  "offline",
-  "timeout",
-  "unauthorized",
   "invalid-request",
-  "invalid-response",
   "storage-failure",
 ]);
 export type RuntimeFailureReason = z.infer<typeof RuntimeFailureReasonSchema>;

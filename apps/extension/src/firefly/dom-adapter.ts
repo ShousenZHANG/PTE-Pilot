@@ -158,14 +158,31 @@ export class PredictionEditionOverrideState {
   }
 }
 
+type FireflyScoreAnswerState = {
+  candidateCount: number;
+  node: HTMLElement | null;
+  visible: boolean;
+  fingerprint: string | null;
+};
+
 export class FireflyDomAdapter {
   readonly #document: Document;
   readonly #predictionEditionOverride = new PredictionEditionOverrideState();
-  #activeRevealBinding: {
-    proof: RevealedAnswerProof;
-    node: HTMLElement;
-    signature: RevealSignature;
-  } | null = null;
+  #activeRevealBinding:
+    | {
+        kind: "explicit";
+        proof: RevealedAnswerProof;
+        node: HTMLElement;
+        signature: RevealSignature;
+      }
+    | {
+        kind: "firefly-score";
+        proof: RevealedAnswerProof;
+        node: HTMLElement;
+        signature: RevealSignature;
+        fingerprint: string;
+      }
+    | null = null;
 
   constructor(document: Document = window.document) {
     this.#document = document;
@@ -218,7 +235,8 @@ export class FireflyDomAdapter {
       redo: this.findControls("redo").length === 1,
       play:
         this.findControls("play").length === 1 ||
-        this.visibleAudioElements().length === 1,
+        this.visibleAudioElements().length === 1 ||
+        this.hasAPlayerControl("play"),
       select: this.supportsDirectSelection(),
     };
   }
@@ -334,6 +352,32 @@ export class FireflyDomAdapter {
     element.click();
   }
 
+  playAudio(): void {
+    this.audioControl("play").click();
+  }
+
+  pauseAudio(): void {
+    this.audioControl("pause").click();
+  }
+
+  restartAudio(): void {
+    const player = this.activeAPlayer();
+    resolveUnique(
+      Array.from(player.querySelectorAll<HTMLElement>(".aplayer-list li")),
+      "audio:playlist",
+    );
+    resolveUnique(
+      Array.from(player.querySelectorAll<HTMLElement>(".aplayer-icon-back")),
+      "audio:restart",
+    ).click();
+    const pausedPlayControls = Array.from(
+      player.querySelectorAll<HTMLElement>(".aplayer-button.aplayer-play"),
+    );
+    if (pausedPlayControls.length > 1)
+      resolveUnique(pausedPlayControls, "audio:play");
+    pausedPlayControls[0]?.click();
+  }
+
   writeAnswer(value: string): void {
     const input = this.input();
     const setter = Object.getOwnPropertyDescriptor(
@@ -372,32 +416,59 @@ export class FireflyDomAdapter {
     timeoutMs = 8_000,
   ): Promise<RevealedAnswerProof | null> {
     this.#activeRevealBinding = null;
-    const beforeReveal = this.revealSignature();
-    if (beforeReveal.visible) throw new Error("score:answer-already-visible");
-    if (this.revealNodes().some((node) => answerTextLength(node) > 0))
+    const beforeExplicitReveal = this.explicitRevealSignature();
+    const beforeFireflyReveal = this.fireflyScoreAnswerState();
+    if (this.revealSignature().visible)
+      throw new Error("score:answer-already-visible");
+    if (this.explicitRevealNodes().some((node) => answerTextLength(node) > 0))
       throw new Error("score:stale-answer-residue");
+    if (beforeFireflyReveal.candidateCount > 1)
+      throw new Error("score:firefly-answer-ambiguous");
     const beforeScore = this.scoreState(expected);
     const outcome = await this.waitForVerifiedTransition(
       expected,
       () => {
-        const afterReveal = this.revealSignature();
+        const afterExplicitReveal = this.explicitRevealSignature();
+        const afterFireflyReveal = this.fireflyScoreAnswerState();
         const afterScore = this.scoreState(expected);
-        if (revealTransitioned(beforeReveal, afterReveal)) return "reveal";
+        if (revealTransitioned(beforeExplicitReveal, afterExplicitReveal)) {
+          return { kind: "explicit-reveal" } as const;
+        }
+        if (
+          fireflyAnswerTransitioned(beforeFireflyReveal, afterFireflyReveal) &&
+          afterFireflyReveal.node &&
+          afterFireflyReveal.fingerprint
+        ) {
+          return {
+            kind: "firefly-reveal",
+            node: afterFireflyReveal.node,
+            fingerprint: afterFireflyReveal.fingerprint,
+          } as const;
+        }
         if (
           afterScore.complete &&
           !beforeScore.complete &&
           afterScore.signature !== beforeScore.signature
         )
-          return "score";
+          return { kind: "score" } as const;
         return null;
       },
       () => this.click("score"),
       timeoutMs,
       "score",
     );
-    return outcome === "reveal"
-      ? this.bindRevealProof(expected, operationToken, "score")
-      : null;
+    if (outcome.kind === "explicit-reveal") {
+      return this.bindExplicitRevealProof(expected, operationToken, "score");
+    }
+    if (outcome.kind === "firefly-reveal") {
+      return this.bindCausalFireflyProof(
+        expected,
+        operationToken,
+        outcome.node,
+        outcome.fingerprint,
+      );
+    }
+    return null;
   }
 
   async revealAnswerAndWait(
@@ -406,16 +477,19 @@ export class FireflyDomAdapter {
     timeoutMs = 8_000,
   ): Promise<RevealedAnswerProof> {
     this.#activeRevealBinding = null;
-    const before = this.revealSignature();
+    const before = this.explicitRevealSignature();
     if (before.visible) throw new Error("reveal:answer-already-visible");
     await this.waitForVerifiedTransition(
       expected,
-      () => (revealTransitioned(before, this.revealSignature()) ? true : null),
+      () =>
+        revealTransitioned(before, this.explicitRevealSignature())
+          ? true
+          : null,
       () => this.click("answer"),
       timeoutMs,
       "reveal",
     );
-    return this.bindRevealProof(expected, operationToken, "answer");
+    return this.bindExplicitRevealProof(expected, operationToken, "answer");
   }
 
   isScoreComplete(): boolean {
@@ -429,9 +503,18 @@ export class FireflyDomAdapter {
     const identity = this.readIdentity();
     if (!sameQuestionIdentity(identity, proof))
       throw new Error("answer:question-changed");
-    const visible = this.revealNodes().filter(isVisible);
+    const visible =
+      binding.kind === "firefly-score"
+        ? this.fireflyScoreAnswerNodes().filter(isVisible)
+        : this.explicitRevealNodes().filter(isVisible);
     const node = resolveUnique(visible, "answer:revealed");
     if (node !== binding.node) throw new Error("answer:reveal-node-changed");
+    if (
+      binding.kind === "firefly-score" &&
+      answerFingerprint(node) !== binding.fingerprint
+    ) {
+      throw new Error("answer:reveal-changed");
+    }
     const signature = this.revealSignature();
     if (!sameRevealSignature(signature, binding.signature))
       throw new Error("answer:reveal-changed");
@@ -530,6 +613,44 @@ export class FireflyDomAdapter {
     );
   }
 
+  private activeAPlayer(): HTMLElement {
+    const players = Array.from(
+      this.#document.querySelectorAll<HTMLElement>(".aplayer"),
+    ).filter(
+      (player) =>
+        Array.from(
+          player.querySelectorAll<HTMLElement>(".aplayer-bar-wrap"),
+        ).filter(isVisible).length === 1,
+    );
+    return resolveUnique(players, "audio:player");
+  }
+
+  private audioControl(action: "play" | "pause"): HTMLElement {
+    const semanticControls = this.findControls(action);
+    return semanticControls.length > 0
+      ? resolveUnique(semanticControls, `audio:${action}`)
+      : resolveUnique(
+          Array.from(
+            this.activeAPlayer().querySelectorAll<HTMLElement>(
+              `.aplayer-button.aplayer-${action}`,
+            ),
+          ),
+          `audio:${action}`,
+        );
+  }
+
+  private hasAPlayerControl(action: "play" | "pause"): boolean {
+    try {
+      return (
+        this.activeAPlayer().querySelectorAll(
+          `.aplayer-button.aplayer-${action}`,
+        ).length === 1
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private findInputs(): HTMLTextAreaElement[] {
     const visible = Array.from(
       this.#document.querySelectorAll("textarea"),
@@ -583,6 +704,10 @@ export class FireflyDomAdapter {
   }
 
   private revealNodes(): HTMLElement[] {
+    return [...this.explicitRevealNodes(), ...this.fireflyScoreAnswerNodes()];
+  }
+
+  private explicitRevealNodes(): HTMLElement[] {
     const selectors = [
       "[data-pte-answer]",
       "[data-testid='answer']",
@@ -592,6 +717,37 @@ export class FireflyDomAdapter {
     return Array.from(
       this.#document.querySelectorAll<HTMLElement>(selectors.join(", ")),
     );
+  }
+
+  private explicitRevealSignature(): RevealSignature {
+    const visibleNodes = this.explicitRevealNodes().filter(isVisible);
+    return {
+      visible: visibleNodes.length > 0,
+      nodeCount: visibleNodes.length,
+      textLength: visibleNodes.reduce(
+        (sum, node) => sum + normalizeLabel(node.textContent).length,
+        0,
+      ),
+    };
+  }
+
+  private fireflyScoreAnswerNodes(): HTMLElement[] {
+    return Array.from(
+      this.#document.querySelectorAll<HTMLElement>(
+        ".el-dialog__wrapper.ai-score pre",
+      ),
+    ).filter((node) => node.querySelector("span.oneword") !== null);
+  }
+
+  private fireflyScoreAnswerState(): FireflyScoreAnswerState {
+    const nodes = this.fireflyScoreAnswerNodes();
+    const node = nodes.length === 1 ? (nodes[0] ?? null) : null;
+    return {
+      candidateCount: nodes.length,
+      node,
+      visible: node ? isVisible(node) : false,
+      fingerprint: node ? answerFingerprint(node) : null,
+    };
   }
 
   private scoreState(expected: QuestionIdentity): {
@@ -694,7 +850,7 @@ export class FireflyDomAdapter {
     });
   }
 
-  private bindRevealProof(
+  private bindExplicitRevealProof(
     expected: QuestionIdentity,
     operationToken: string,
     source: RevealedAnswerProof["source"],
@@ -703,7 +859,7 @@ export class FireflyDomAdapter {
     if (!sameQuestionIdentity(identity, expected))
       throw new Error(`${source}:question-changed`);
     const node = resolveUnique(
-      this.revealNodes().filter(isVisible),
+      this.explicitRevealNodes().filter(isVisible),
       "answer:revealed",
     );
     if (ownedQuestionId(node) !== expected.questionId)
@@ -717,7 +873,49 @@ export class FireflyDomAdapter {
       operationToken,
       source,
     }) satisfies RevealedAnswerProof;
-    this.#activeRevealBinding = { proof, node, signature };
+    this.#activeRevealBinding = {
+      kind: "explicit",
+      proof,
+      node,
+      signature,
+    };
+    return proof;
+  }
+
+  private bindCausalFireflyProof(
+    expected: QuestionIdentity,
+    operationToken: string,
+    node: HTMLElement,
+    fingerprint: string,
+  ): RevealedAnswerProof {
+    const identity = this.readIdentity();
+    if (!sameQuestionIdentity(identity, expected))
+      throw new Error("score:question-changed");
+    const current = this.fireflyScoreAnswerState();
+    if (
+      current.candidateCount !== 1 ||
+      !current.visible ||
+      current.node !== node ||
+      current.fingerprint !== fingerprint
+    ) {
+      throw new Error("answer:causal-reveal-changed");
+    }
+    const signature = this.revealSignature();
+    const proof = Object.freeze({
+      predictionEdition: identity.predictionEdition,
+      questionId: identity.questionId,
+      position: identity.position,
+      total: identity.total,
+      operationToken,
+      source: "score",
+    }) satisfies RevealedAnswerProof;
+    this.#activeRevealBinding = {
+      kind: "firefly-score",
+      proof,
+      node,
+      signature,
+      fingerprint,
+    };
     return proof;
   }
 
@@ -922,6 +1120,25 @@ function revealTransitioned(
       after.nodeCount !== before.nodeCount ||
       after.textLength !== before.textLength)
   );
+}
+
+function fireflyAnswerTransitioned(
+  before: FireflyScoreAnswerState,
+  after: FireflyScoreAnswerState,
+): boolean {
+  return (
+    !before.visible &&
+    after.candidateCount === 1 &&
+    after.visible &&
+    after.node !== null &&
+    after.fingerprint !== null &&
+    after.fingerprint !== before.fingerprint
+  );
+}
+
+function answerFingerprint(node: HTMLElement): string | null {
+  const answer = normalizeLabel(node.textContent);
+  return answer.length > 0 ? fnv1a64(answer) : null;
 }
 
 function sameQuestionIdentity(

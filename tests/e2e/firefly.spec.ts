@@ -30,12 +30,28 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   );
 
   const answer = page.getByTestId("answer-input");
-  await answer.fill("Students should submit their assignments by Friday");
+  await answer.pressSequentially(
+    "Students should submit their assignments by Friday",
+  );
+  await expect(page.locator(".answer-shell")).toHaveAttribute(
+    "data-impact",
+    /[ab]/u,
+  );
   await page.keyboard.press("Alt+KeyP");
   await expect
-    .poll(() => page.locator("#play").getAttribute("data-count"))
+    .poll(() => page.locator("#aplayer-control").getAttribute("data-count"))
     .toBe("1");
   await expect(page.getByTestId("audio-status")).toContainText("PLAYING");
+
+  await page.keyboard.press("Alt+KeyR");
+  await expect
+    .poll(() => page.locator("#aplayer-back").getAttribute("data-count"))
+    .toBe("1");
+  await expect(page.getByTestId("audio-status")).toContainText("PLAYING");
+  await expect(page.locator("#aplayer-control")).toHaveAttribute(
+    "data-fetch-count",
+    "1",
+  );
 
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
@@ -98,7 +114,7 @@ test("same-URL login page fails closed as AUTH_REQUIRED", async ({
 function fireflyFixture(): string {
   return `<!doctype html>
 <html>
-<head><meta charset="utf-8"><style>body{font-family:sans-serif}#site-shell{padding:30px}textarea{display:block;width:500px;height:100px}.answer[hidden]{display:none}</style></head>
+<head><meta charset="utf-8"><style>body{font-family:sans-serif}#site-shell{padding:30px}textarea{display:block;width:500px;height:100px}.aplayer-bar-wrap{width:160px;height:8px}.aplayer-button,.aplayer-icon-back{display:none}.ai-score[hidden]{display:none}</style></head>
 <body>
   <main id="site-shell">
     <h1 data-prediction-edition="weekly-2026-29">周预测 weekly-2026-29</h1>
@@ -109,14 +125,29 @@ function fireflyFixture(): string {
       <option value="131002" data-question-id="131002">2</option>
       <option value="131003" data-question-id="131003">3</option>
     </select>
-    <button id="play">Play</button>
+    <div class="aplayer">
+      <div class="aplayer-bar-wrap"></div>
+      <div id="aplayer-control" class="aplayer-button aplayer-play"></div>
+      <span id="aplayer-back" class="aplayer-icon-back"></span>
+      <ol class="aplayer-list"><li>1</li></ol>
+    </div>
+    <div class="audio-pause-btn">Play</div>
     <textarea id="site-answer" placeholder="请输入内容"></textarea>
     <button id="redo">重做</button>
     <button id="answer">答案</button>
     <button id="score">评分</button>
     <button id="previous">上一题</button>
     <button id="next">下一题</button>
-    <div class="answer" data-pte-answer hidden></div>
+    <div class="el-dialog__wrapper ai-score" hidden>
+      <div class="el-dialog" role="dialog" aria-modal="true" aria-label="AI 评分">
+        <div class="el-dialog__body">
+          <h3 class="h3">答案</h3>
+          <pre id="score-answer"><span class="oneword">Stale</span> answer from another question.</pre>
+          <h3 class="h3">译文</h3>
+          <pre>fixture translation</pre>
+        </div>
+      </div>
+    </div>
   </main>
   <script>
     const questions = [
@@ -133,18 +164,48 @@ function fireflyFixture(): string {
       byId("question-id").dataset.questionId = question.id;
       byId("question-select").selectedIndex = current;
       byId("site-answer").value = "";
-      document.querySelector("[data-pte-answer]").hidden = true;
-      document.querySelector("[data-pte-answer]").textContent = "";
+      document.querySelector(".ai-score").hidden = true;
+      byId("aplayer-control").className = "aplayer-button aplayer-play";
+      delete byId("aplayer-control").dataset.fetchCount;
+      delete byId("aplayer-control").dataset.count;
+      delete byId("aplayer-back").dataset.count;
+      document.querySelector(".audio-pause-btn").textContent = "Play";
+    }
+    function setScoreAnswer(answer) {
+      const node = byId("score-answer");
+      node.replaceChildren();
+      answer.split(" ").forEach((word, index) => {
+        if (index > 0) node.append(document.createTextNode(" "));
+        const span = document.createElement("span");
+        span.className = "oneword";
+        span.textContent = word;
+        node.append(span);
+      });
     }
     function reveal() {
-      const node = document.querySelector("[data-pte-answer]");
-      node.dataset.questionId = questions[current].id;
-      node.textContent = questions[current].answer;
-      node.hidden = false;
+      document.querySelector(".ai-score").hidden = false;
+      setTimeout(() => setScoreAnswer(questions[current].answer), 10);
     }
-    byId("play").addEventListener("click", () => {
-      byId("play").dataset.count = String(Number(byId("play").dataset.count || 0) + 1);
-      void fetch("https://upload.fireflyau.com/audio/" + questions[current].id + ".mp3", { cache: "no-store" });
+    byId("aplayer-control").addEventListener("click", () => {
+      const control = byId("aplayer-control");
+      if (control.classList.contains("aplayer-pause")) {
+        control.className = "aplayer-button aplayer-play";
+        document.querySelector(".audio-pause-btn").textContent = "Play";
+        return;
+      }
+      control.className = "aplayer-button aplayer-pause";
+      document.querySelector(".audio-pause-btn").textContent = "Pause";
+      control.dataset.count = String(Number(control.dataset.count || 0) + 1);
+      if (!control.dataset.fetchCount) {
+        control.dataset.fetchCount = "1";
+        void fetch("https://upload.fireflyau.com/audio/" + questions[current].id + ".mp3", { cache: "no-store" });
+      }
+    });
+    byId("aplayer-back").addEventListener("click", () => {
+      const back = byId("aplayer-back");
+      back.dataset.count = String(Number(back.dataset.count || 0) + 1);
+      byId("aplayer-control").className = "aplayer-button aplayer-pause";
+      document.querySelector(".audio-pause-btn").textContent = "Pause";
     });
     byId("score").addEventListener("click", reveal);
     byId("answer").addEventListener("click", reveal);

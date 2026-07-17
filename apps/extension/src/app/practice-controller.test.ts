@@ -1,6 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("PracticeController operation context", () => {
+  it("allows navigation to recover DESYNC without unlocking hard fault phases", async () => {
+    const module = (await import("./practice-controller")) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(module.canNavigateFromPhase).toBeTypeOf("function");
+    const canNavigateFromPhase = module.canNavigateFromPhase as (
+      phase: string,
+    ) => boolean;
+
+    for (const phase of ["ANSWERING", "REVIEW", "COMMAND", "DESYNC"]) {
+      expect(canNavigateFromPhase(phase)).toBe(true);
+    }
+    for (const phase of ["AUTH_REQUIRED", "SITE_CHANGED"]) {
+      expect(canNavigateFromPhase(phase)).toBe(false);
+    }
+  });
+
   it("persists a verified bootstrap as one complete runtime index", async () => {
     const module = (await import("./practice-controller")) as unknown as Record<
       string,

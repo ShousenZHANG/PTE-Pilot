@@ -48,8 +48,14 @@ function setup(observation: AudioCaptureEvent | Promise<AudioCaptureEvent>) {
       total: 2,
       tags: [],
     }),
-    click: vi.fn((name) => {
-      order.push(`site:${name}`);
+    playAudio: vi.fn(() => {
+      order.push("site:play");
+    }),
+    pauseAudio: vi.fn(() => {
+      order.push("site:pause");
+    }),
+    restartAudio: vi.fn(() => {
+      order.push("site:restart");
     }),
     visibleAudioElements: () => [],
   };
@@ -68,6 +74,7 @@ function setup(observation: AudioCaptureEvent | Promise<AudioCaptureEvent>) {
     broker,
     capture,
     order,
+    site,
   };
 }
 
@@ -107,6 +114,83 @@ describe("AudioBroker causal capture", () => {
     resolveObservation?.(event());
     await Promise.all([first, second]);
 
+    expect(broker.state).toBe("PLAYING");
+  });
+
+  test("reuses the verified capture when replaying the same question", async () => {
+    const { broker, capture, order } = setup(event());
+
+    await broker.play();
+    await broker.restart();
+
+    expect(capture.begin).toHaveBeenCalledOnce();
+    expect(order).toContain("site:restart");
+    expect(broker.state).toBe("PLAYING");
+  });
+
+  test("fails closed when the verified site replay control fails", async () => {
+    const { broker, site } = setup(event());
+    await broker.play();
+    vi.mocked(site.restartAudio).mockImplementation(() => {
+      throw new Error("audio:restart:missing");
+    });
+
+    await expect(broker.restart()).rejects.toMatchObject({
+      code: "AUDIO_ERROR",
+      message: "audio:restart:missing",
+    });
+    expect(broker.state).toBe("AUDIO_ERROR");
+  });
+
+  test("requires a fresh causal capture after binding a new question", async () => {
+    let questionId = "q-1";
+    const site = {
+      readIdentity: () => ({
+        predictionEdition: "weekly-test",
+        questionId,
+        position: questionId === "q-1" ? 1 : 2,
+        total: 2,
+        tags: [],
+      }),
+      playAudio: vi.fn(),
+      pauseAudio: vi.fn(),
+      restartAudio: vi.fn(),
+      visibleAudioElements: () => [],
+    } satisfies AudioSitePort;
+    const capture = {
+      begin: vi.fn(async (activeBinding: ReturnType<typeof binding>) => ({
+        armedAt: 1_000,
+        observation: Promise.resolve(
+          event({ binding: activeBinding, armedAt: 1_000 }),
+        ),
+      })),
+      cancel: vi.fn(async () => undefined),
+    } satisfies AudioCapturePort;
+    const tokens = [TOKEN, "a498fe99-3875-491e-a102-11c7ed087909"];
+    const broker = new AudioBroker(
+      site,
+      capture,
+      () => tokens.shift() ?? TOKEN,
+    );
+
+    broker.bind("q-1", 3);
+    await broker.play();
+    questionId = "q-2";
+    broker.bind("q-2", 4);
+    await broker.play();
+
+    expect(capture.begin).toHaveBeenCalledTimes(2);
+  });
+
+  test("exam replay refusal preserves the current playback state", async () => {
+    const { broker } = setup(event());
+    broker.setMode("exam");
+    await broker.play();
+
+    await expect(broker.restart()).rejects.toMatchObject({
+      code: "AUDIO_ERROR",
+      message: "audio:exam-play-consumed",
+    });
     expect(broker.state).toBe("PLAYING");
   });
 
@@ -159,9 +243,11 @@ describe("AudioBroker causal capture", () => {
         total: 2,
         tags: [],
       }),
-      click: (name: "play" | "pause") => {
-        if (name === "play") questionId = "q-2";
+      playAudio: () => {
+        questionId = "q-2";
       },
+      pauseAudio: () => undefined,
+      restartAudio: () => undefined,
       visibleAudioElements: () => [],
     } satisfies AudioSitePort;
     const active = new AudioBroker(site, capture, () => TOKEN);
@@ -193,7 +279,9 @@ describe("AudioBroker causal capture", () => {
         total: 2,
         tags: [],
       }),
-      click: (name: "play" | "pause") => clicks.push(name),
+      playAudio: () => clicks.push("play"),
+      pauseAudio: () => clicks.push("pause"),
+      restartAudio: () => clicks.push("restart"),
       visibleAudioElements: () => [],
     } satisfies AudioSitePort;
     const tokens = [TOKEN, "a498fe99-3875-491e-a102-11c7ed087909"];

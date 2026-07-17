@@ -7,15 +7,6 @@ import type {
 } from "@pte-pilot/contracts";
 import Dexie, { type Table } from "dexie";
 
-export interface OutboxRecord {
-  attemptId: string;
-  batchId: string | null;
-  status: "pending" | "inflight";
-  retryCount: number;
-  nextAttemptAt: string;
-  leaseExpiresAt: string | null;
-}
-
 export interface WordStatRecord {
   key: string;
   expected: string;
@@ -45,10 +36,7 @@ export interface SessionRecord {
   updatedAt: string;
 }
 
-export type MetaId =
-  | "learner-state-version"
-  | "projection-instance-id"
-  | "projection-version";
+export type MetaId = "learner-state-version";
 
 export interface MetaRecord {
   id: MetaId;
@@ -59,7 +47,6 @@ export interface MetaRecord {
 export class PtePilotDb extends Dexie {
   drafts!: Table<DraftCheckpoint, readonly [string, string]>;
   attempts!: Table<AttemptEvent, string>;
-  outbox!: Table<OutboxRecord, string>;
   wordStats!: Table<WordStatRecord, string>;
   questionProgress!: Table<QuestionProgressRecord, readonly [string, string]>;
   questions!: Table<IndexedQuestion, readonly [string, string]>;
@@ -85,6 +72,15 @@ export class PtePilotDb extends Dexie {
       settings: "&id, updatedAt",
       meta: "&id",
     });
+    this.version(2)
+      .stores({
+        outbox: null,
+      })
+      .upgrade((transaction) =>
+        transaction
+          .table("meta")
+          .bulkDelete(["projection-instance-id", "projection-version"]),
+      );
   }
 }
 

@@ -87,6 +87,25 @@ describe("routeKeyboard", () => {
     });
   });
 
+  it("allows only explicit Alt navigation shortcuts while recovering from DESYNC", () => {
+    expect(key("j", { phase: "DESYNC" }, { altKey: true })).toEqual({
+      action: "next",
+      consume: true,
+    });
+    expect(key("k", { phase: "DESYNC" }, { altKey: true })).toEqual({
+      action: "previous",
+      consume: true,
+    });
+    expect(key("j", { phase: "DESYNC" })).toEqual({
+      action: null,
+      consume: false,
+    });
+    expect(key("k", { phase: "DESYNC" })).toEqual({
+      action: null,
+      consume: false,
+    });
+  });
+
   it("keeps the global overlay toggle available while the overlay is closed", () => {
     expect(
       key("p", { overlayOpen: false }, { altKey: true, shiftKey: true }),

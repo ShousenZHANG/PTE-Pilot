@@ -19,11 +19,7 @@ test("built manifest keeps the approved least-privilege boundary", async () => {
     "webRequest",
   ]);
   expect([...(manifest.host_permissions ?? [])].sort()).toEqual(
-    [
-      "http://127.0.0.1:8642/*",
-      "https://upload.fireflyau.com/*",
-      "https://www.fireflyau.com/*",
-    ].sort(),
+    ["https://upload.fireflyau.com/*", "https://www.fireflyau.com/*"].sort(),
   );
   expect(manifest.permissions ?? []).not.toEqual(
     expect.arrayContaining(["cookies", "debugger", "downloads", "tabs"]),

@@ -20,7 +20,6 @@ export const RuntimeFaultCodeSchema = z.enum([
   "DESYNC",
   "AUDIO_ERROR",
   "INDEX_PARTIAL",
-  "HERMES_OFFLINE",
   "STORAGE_ERROR",
 ]);
 export type RuntimeFaultCode = z.infer<typeof RuntimeFaultCodeSchema>;
@@ -83,7 +82,6 @@ export const PracticeStateSchema = z
     attemptEpoch: AttemptEpochSchema,
     audioStatus: AudioStatusSchema,
     indexStatus: IndexStatusSchema,
-    hermesOnline: z.boolean(),
     fault: RuntimeFaultSchema.nullable(),
   })
   .strict();

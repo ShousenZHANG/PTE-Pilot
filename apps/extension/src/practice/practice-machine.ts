@@ -77,7 +77,6 @@ export type PracticeEvent =
     }
   | { type: "AUDIO_STATUS_CHANGED"; status: AudioStatus }
   | { type: "INDEX_STATUS_CHANGED"; status: IndexStatus }
-  | { type: "HERMES_STATUS_CHANGED"; online: boolean }
   | { type: "FAULTED"; fault: RuntimeFault }
   | { type: "RETRY" }
   | { type: "PAUSE" };
@@ -91,7 +90,6 @@ export function createInitialMachineState(): PracticeMachineState {
       attemptEpoch: AttemptEpochSchema.parse(0),
       audioStatus: "EMPTY",
       indexStatus: "IDLE",
-      hermesOnline: false,
       fault: null,
     },
     draft: "",
@@ -297,21 +295,7 @@ export function transition(
             ? null
             : state.runtime.fault,
       });
-    case "HERMES_STATUS_CHANGED":
-      return updateRuntime(state, {
-        hermesOnline: event.online,
-        fault:
-          event.online && state.runtime.fault?.code === "HERMES_OFFLINE"
-            ? null
-            : state.runtime.fault,
-      });
     case "FAULTED":
-      if (event.fault.code === "HERMES_OFFLINE") {
-        return updateRuntime(state, {
-          hermesOnline: false,
-          fault: event.fault,
-        });
-      }
       if (event.fault.code === "INDEX_PARTIAL") {
         return updateRuntime(state, {
           indexStatus: "PARTIAL",

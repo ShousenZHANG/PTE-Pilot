@@ -13,7 +13,7 @@ export default defineBackground(() => {
   startAudioCaptureBackground(browser as unknown as AudioCaptureBrowserApi);
   void startCockpitBackground(browser as unknown as BackgroundBrowserApi).catch(
     () => {
-      // Fail closed: content UI reports unavailable storage/Gateway capabilities.
+      // Fail closed: content UI reports unavailable local storage.
     },
   );
 });

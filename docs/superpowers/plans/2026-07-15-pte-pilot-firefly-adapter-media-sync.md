@@ -4,7 +4,7 @@
 
 **Goal:** Build a fail-closed Firefly WFD adapter that reads the current weekly-prediction question, uses the site's authenticated audio, keeps extension and website navigation synchronized, supports resumable indexing, and exposes only narrow controller ports. Correct-answer plaintext is available only inside `AnswerGate`, and only after an atomic, proven score/reveal transaction.
 
-**Architecture:** `FireflySitePort` is a raw composition-only adapter. `PracticeController` receives only `SubmissionGatePort`, `NavigationPort`, `IndexPort`, `AudioPort`, `StoragePort`, and `GatewayPort`; it never receives the raw site or an answer reader. `AnswerGate` owns raw answer write/score/reveal and is the only correct-answer consumer. `NavigationCoordinator` owns raw next/previous/select/redo and returns monotonic results while reporting site-observed changes through handlers. `QuestionIndexer` traverses only through the coordinator's private indexing facet and persists checkpoints through the existing `StoragePort`. Media capture is armed locally before native Play, bound in the Service Worker at `onBeforeRequest`, and accepted only when capture token, navigation epoch, question ID, and time fence all match.
+**Architecture:** `FireflySitePort` is a raw composition-only adapter. `PracticeController` receives only `SubmissionGatePort`, `NavigationPort`, `IndexPort`, `AudioPort`, and `StoragePort`; it never receives the raw site or an answer reader. `AnswerGate` owns raw answer write/score/reveal and is the only correct-answer consumer. `NavigationCoordinator` owns raw next/previous/select/redo and returns monotonic results while reporting site-observed changes through handlers. `QuestionIndexer` traverses only through the coordinator's private indexing facet and persists checkpoints through the existing `StoragePort`. Media capture is armed locally before native Play, bound in the Service Worker at `onBeforeRequest`, and accepted only when capture token, navigation epoch, question ID, and time fence all match.
 
 **Tech stack:** WXT 0.20.27, Chrome MV3, React 19.2.7, TypeScript 6.0.3, Zod 4.4.3, Vitest 4.1.10, Playwright 1.61.1.
 
@@ -12,13 +12,13 @@
 
 - Consume shared schemas from `@pte-pilot/contracts`; do not duplicate branded token, question, index, fault, or practice-state schemas in `apps/extension`.
 - Never hard-code `192`, `yc-current`, or another guessed edition. The current site's one-based `position`, `total`, and verified edition evidence are authoritative.
-- Never expose a correct answer before scoring/reveal proof. Before proof, correct-answer text must not enter UI state, controller state, IndexedDB, logs, MAIN/isolated bridge messages, background messages, or Hermes/Gateway traffic.
+- Never expose a correct answer before scoring/reveal proof. Before proof, correct-answer text must not enter UI state, controller state, IndexedDB, logs, MAIN/isolated bridge messages, or background messages.
 - `AnswerGate` is the only extension module that may call the raw revealed-answer reader or receive its plaintext result. It must erase its local plaintext reference before its transaction resolves.
 - Never enumerate or persist media bytes. Resolve only the active question's current request; never persist `Blob`, `ArrayBuffer`, audio response body, or a bulk media catalog.
 - Default playback mode is `site-player-only`. `transfer-to-extension` is permitted only when Phase 0 explicitly proves a pause/reset transfer contract. Native and extension audio must never play simultaneously.
 - Stop probing/indexing on login redirect, `401`, `403`, `429`, CAPTCHA, ambiguous semantic targets, changing totals, repeated IDs, unresolvable edition, or schema drift. Do not retry automatically.
 - A site-observed navigation reconciles the latest live snapshot and never clicks another control.
-- Do not request `cookies`, `debugger`, `downloads`, `tabs`, or `<all_urls>`. `webRequest`, `storage`, the exact Firefly exercise origin, the exact upload origin, and loopback Gateway origin are sufficient.
+- Do not request `cookies`, `debugger`, `downloads`, `tabs`, or `<all_urls>`. `webRequest`, `storage`, the exact Firefly exercise origin, and the exact upload origin are sufficient.
 - Preserve `browser.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })` in the composed background entrypoint.
 - Every async completion validates the operation identity it owns before mutating state.
 - Mount Cockpit UI before `runtime.start()`. A recoverable startup failure must render in the already-mounted UI.
@@ -112,7 +112,6 @@ export interface PracticeControllerDeps {
   index: IndexPort;
   audio: AudioPort;
   storage: StoragePort;
-  gateway: GatewayPort;
   clock: () => number;
 }
 ```
@@ -1116,7 +1115,6 @@ export function bootstrapFireflySync(args: {
   const bridge = createBridgeClient(args.document);
   const site = createFireflyDomSitePort({ document: args.document, bridge });
   const storage = createRuntimeStoragePort(args.runtime);
-  const gateway = createRuntimeGatewayPort(args.runtime);
   let controller!: PracticeController;
   const navigationCoordinator = createNavigationCoordinator({
     raw: site,
@@ -1153,7 +1151,6 @@ export function bootstrapFireflySync(args: {
     index,
     audio,
     storage,
-    gateway,
     clock: Date.now,
   });
 
@@ -1311,7 +1308,7 @@ git commit -m "test(e2e): prove Firefly adapter media and sync invariants"
 - [ ] Verify no hard-coded `192` or `yc-current` exists in production code.
 - [ ] Verify the raw answer-reader is declared only in the raw port/DOM adapter and called only by `answer-gate.ts`.
 - [ ] Verify no raw site navigation/submission capability appears in `PracticeControllerDeps`.
-- [ ] Verify no media bytes or answer plaintext are persisted or sent to Hermes/Gateway.
+- [ ] Verify no media bytes or answer plaintext are persisted or sent outside the extension.
 - [ ] Verify MAIN patches and runtime listeners all have idempotent cleanup.
 
 ```powershell

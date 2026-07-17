@@ -3,7 +3,6 @@ import type {
   IndexedQuestion as ContractIndexedQuestion,
   IndexSnapshot as ContractIndexSnapshot,
   QuestionRef,
-  RankCandidate,
   RuntimeFault,
   UserSettings,
   WordStatSummary,
@@ -32,11 +31,7 @@ import {
   type IndexCheckpointPort,
   QuestionIndexer,
 } from "../firefly/question-indexer";
-import {
-  createRankRequest,
-  rankLocally,
-  rankWithGatewayFallback,
-} from "../learning/ranking";
+import { rankLocally } from "../learning/ranking";
 import { RuntimeClient } from "../runtime/runtime-client";
 import { DEFAULT_ALT_KEYMAP, isValidKeymap } from "./keyboard";
 
@@ -49,7 +44,6 @@ export interface CockpitViewState {
   audioStatus: string;
   indexStatus: string;
   siteStatus: string;
-  hermesStatus: string;
   notice: string;
   marked: boolean;
   words: WordStatSummary[];
@@ -65,6 +59,17 @@ export interface ControllerOperationContext {
   total: number;
   navigationEpoch: number;
   initializeGeneration: number;
+}
+
+const NAVIGABLE_PHASES = new Set<PracticePhase>([
+  "ANSWERING",
+  "REVIEW",
+  "COMMAND",
+  "DESYNC",
+]);
+
+export function canNavigateFromPhase(phase: PracticePhase): boolean {
+  return NAVIGABLE_PHASES.has(phase);
 }
 
 export function isSameControllerOperation(
@@ -158,7 +163,6 @@ export class PracticeController extends EventTarget {
     audioStatus: "EMPTY",
     indexStatus: "IDLE",
     siteStatus: "正在验证萤火虫页面",
-    hermesStatus: "离线可用",
     notice: "",
     marked: false,
     words: [],
@@ -390,9 +394,6 @@ export class PracticeController extends EventTarget {
       draft,
       marked,
       siteStatus: "已同步",
-      hermesStatus: sessionMode
-        ? "当前题集未验证；仅本次会话，不写入 Hermes"
-        : "Hermes 检查中，本地练习可用",
       audioStatus: "EMPTY",
       indexStatus: checkpoints.isCompleteFor(activeIdentity)
         ? "COMPLETE"
@@ -401,17 +402,6 @@ export class PracticeController extends EventTarget {
           : "IDLE",
     });
     this.#startedAt = performance.now();
-    if (!sessionMode) {
-      void this.#runtime.gatewayHealth().then((health) => {
-        if (!this.isCurrentInitialization(generation)) return;
-        this.patch({
-          hermesStatus:
-            health?.hermes.status === "ready"
-              ? "Hermes 已连接"
-              : "Hermes 离线，本地练习可用",
-        });
-      });
-    }
     if (!checkpoints.isCompleteFor(activeIdentity)) void this.discoverIndex();
   }
 
@@ -459,7 +449,7 @@ export class PracticeController extends EventTarget {
         phase: "REVIEW",
         review,
         notice: this.#sessionMode
-          ? "本次结果仅保留在当前会话；完整索引后才写入长期记忆"
+          ? "本次结果仅保留在当前会话；完成索引后可保存本地记录"
           : review.errors.length
             ? "已记录错词"
             : "完全正确",
@@ -475,11 +465,7 @@ export class PracticeController extends EventTarget {
     const identity = this.#state.identity;
     const epoch = this.#latestNavigationEpoch;
     const generation = this.#initializeGeneration;
-    if (
-      !navigation ||
-      !identity ||
-      !new Set(["ANSWERING", "REVIEW", "COMMAND"]).has(this.#state.phase)
-    ) {
+    if (!navigation || !identity || !canNavigateFromPhase(this.#state.phase)) {
       return;
     }
     this.patch({ phase: "NAVIGATING", notice: "", siteStatus: "正在切题" });
@@ -753,36 +739,6 @@ export class PracticeController extends EventTarget {
     return true;
   }
 
-  async pairGateway(pairingCode: string): Promise<boolean> {
-    try {
-      const health = await this.#runtime.pairGateway(
-        pairingCode.trim().toUpperCase(),
-      );
-      this.patch({
-        hermesStatus:
-          health.hermes.status === "ready"
-            ? "Hermes 已连接"
-            : "Gateway 已配对，Hermes 离线",
-        notice: "Gateway 配对成功",
-      });
-      return true;
-    } catch {
-      this.patch({ notice: "配对失败；确认本机 Gateway 与配对码" });
-      return false;
-    }
-  }
-
-  async syncGateway(): Promise<void> {
-    try {
-      const result = await this.#runtime.syncGateway();
-      this.patch({
-        notice: `记忆同步：确认 ${result.acknowledged}，待发 ${result.pending}`,
-      });
-    } catch {
-      this.patch({ notice: "Gateway 离线；本地练习不受影响" });
-    }
-  }
-
   async toggleMarked(): Promise<void> {
     const identity = this.#state.identity;
     if (!identity) return;
@@ -809,7 +765,7 @@ export class PracticeController extends EventTarget {
     const identity = this.#state.identity;
     if (!identity || this.#state.phase !== "COMMAND") return false;
     if (!canPersistPredictionEdition(identity.predictionEdition)) {
-      this.patch({ notice: "完整索引后才能生成长期记忆复习顺序" });
+      this.patch({ notice: "完整索引后才能生成本地复习顺序" });
       return false;
     }
     const initializeGeneration = this.#initializeGeneration;
@@ -835,68 +791,20 @@ export class PracticeController extends EventTarget {
       if (!isCurrent()) return false;
       const allCandidates = snapshot.candidates;
       const localOrder = rankLocally(allCandidates);
-      const candidatesById = new Map(
-        allCandidates.map((candidate) => [candidate.questionId, candidate]),
-      );
-      const boundedCandidates = localOrder
-        .slice(0, 100)
-        .map((questionId) => candidatesById.get(questionId))
-        .filter(
-          (candidate): candidate is RankCandidate => candidate !== undefined,
-        );
-      const request = await createRankRequest(
-        boundedCandidates,
-        snapshot.learnerStateVersion,
+      const currentIndex = await this.#runtime.loadIndexSnapshot(
+        identity.predictionEdition,
       );
       if (!isCurrent()) return false;
-      const readCurrentState = async () => {
-        const [currentFacts, currentIndex] = await Promise.all([
-          this.#runtime.getRankCandidates(
-            identity.predictionEdition,
-            boundedCandidates.map((candidate) => candidate.questionId),
-          ),
-          this.#runtime.loadIndexSnapshot(identity.predictionEdition),
-        ]);
-        const currentIds = currentIndex.questions.map(
-          (question) => question.questionId,
-        );
-        return {
-          learnerStateVersion: currentFacts.learnerStateVersion,
-          sameIndex: currentIds.join("\u0000") === allIds.join("\u0000"),
-        };
-      };
-      const rankedTop = await rankWithGatewayFallback(
-        {
-          rank: (rankRequest) =>
-            this.#runtime.rank(identity.predictionEdition, rankRequest),
-        },
-        request,
-        undefined,
-        async () => {
-          const current = await readCurrentState();
-          return current.sameIndex
-            ? current.learnerStateVersion
-            : request.learnerStateVersion + 1;
-        },
+      const currentIds = currentIndex.questions.map(
+        (question) => question.questionId,
       );
-      if (!isCurrent()) return false;
-      const current = await readCurrentState();
-      if (
-        !isCurrent() ||
-        !current.sameIndex ||
-        current.learnerStateVersion !== request.learnerStateVersion
-      )
-        return false;
-      const rankedSet = new Set(rankedTop);
+      if (currentIds.join("\u0000") !== allIds.join("\u0000")) return false;
       this.patch({
-        rankedQuestionIds: [
-          ...rankedTop,
-          ...localOrder.filter((questionId) => !rankedSet.has(questionId)),
-        ],
+        rankedQuestionIds: localOrder,
         notice:
           indexSnapshot.completeness === "complete"
-            ? "复习顺序已生成"
-            : "已按部分索引生成复习顺序；可稍后补全索引",
+            ? "本地复习顺序已生成"
+            : "已按部分索引生成本地复习顺序；可稍后补全索引",
       });
       return true;
     } catch (error) {
@@ -1702,7 +1610,6 @@ function diagnosticFault(code: string, message: string): RuntimeFault {
     "DESYNC",
     "AUDIO_ERROR",
     "INDEX_PARTIAL",
-    "HERMES_OFFLINE",
     "STORAGE_ERROR",
   ]).has(code)
     ? (code as RuntimeFault["code"])

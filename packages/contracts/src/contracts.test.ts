@@ -2,13 +2,10 @@ import { describe, expect, test } from "vitest";
 import {
   AttemptEpochSchema,
   AttemptEventSchema,
-  BatchUpsertRequestSchema,
-  GatewayHealthSchema,
   IndexSnapshotSchema,
   NavigationEpochSchema,
   PracticeStateSchema,
   QuestionRefSchema,
-  RankRequestSchema,
   RuntimeRequestSchema,
   SubmissionTokenSchema,
 } from "./index";
@@ -55,44 +52,10 @@ describe("shared contracts", () => {
       errors: [{ expected: "sentence", actual: "sentense", type: "spelling" }],
       completedAt: "2026-07-15T10:00:00.000Z",
     });
-    expect(
-      BatchUpsertRequestSchema.parse({
-        batchId: "f7cb19be-7aa2-4e80-bc4b-6f2c924b864f",
-        events: [attempt],
-      }).events,
-    ).toHaveLength(1);
     expect(() =>
       AttemptEventSchema.parse({
         ...attempt,
         correctSentence: "secret answer",
-      }),
-    ).toThrow();
-  });
-
-  test("requires unique rank candidates and parses a bounded request", () => {
-    const candidate = {
-      questionId: "131020",
-      dueScore: 1,
-      weaknessScore: 0.5,
-      noveltyScore: 0,
-      marked: false,
-      attemptCount: 2,
-      lastAttemptAt: "2026-07-15T10:00:00.000Z",
-    };
-    expect(
-      RankRequestSchema.parse({
-        decisionId: "fbbe1ba0-e458-49ab-b03a-0ceebb1d32a8",
-        candidateSetHash: `sha256:${"a".repeat(64)}`,
-        learnerStateVersion: 3,
-        candidates: [candidate],
-      }).candidates,
-    ).toHaveLength(1);
-    expect(() =>
-      RankRequestSchema.parse({
-        decisionId: "fbbe1ba0-e458-49ab-b03a-0ceebb1d32a8",
-        candidateSetHash: `sha256:${"a".repeat(64)}`,
-        learnerStateVersion: 3,
-        candidates: [candidate, candidate],
       }),
     ).toThrow();
   });
@@ -106,7 +69,6 @@ describe("shared contracts", () => {
         attemptEpoch: AttemptEpochSchema.parse(0),
         audioStatus: "READY",
         indexStatus: "PARTIAL",
-        hermesOnline: false,
         fault: null,
       }).phase,
     ).toBe("ANSWERING");
@@ -122,32 +84,5 @@ describe("shared contracts", () => {
     expect(() =>
       RuntimeRequestSchema.parse({ ...message, arbitrary: true }),
     ).toThrow();
-    expect(
-      RuntimeRequestSchema.parse({
-        requestId: "785f5d2c-ed8d-48b5-ac54-32a0a8129747",
-        action: "gateway/pair",
-        pairingCode: "ABCDEFGH2345",
-      }).action,
-    ).toBe("gateway/pair");
-  });
-
-  test("requires exact Gateway identity and bounded capabilities", () => {
-    expect(
-      GatewayHealthSchema.parse({
-        service: "pte-pilot",
-        status: "degraded",
-        profile: "pte-pilot",
-        schemaVersion: 1,
-        projectionInstanceId: "ef8153d5-87c5-48f4-9340-d369927b801f",
-        projectionVersion: 0,
-        capabilities: ["events:batchUpsert", "rank", "pair"],
-        hermes: {
-          status: "offline",
-          model: null,
-          enabledTools: [],
-          unexpectedTools: [],
-        },
-      }).profile,
-    ).toBe("pte-pilot");
   });
 });

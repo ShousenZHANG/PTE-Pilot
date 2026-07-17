@@ -64,7 +64,6 @@ const INITIAL_STATE: CockpitViewState = {
   audioStatus: "EMPTY",
   indexStatus: "IDLE",
   siteStatus: "正在验证萤火虫页面",
-  hermesStatus: "离线可用",
   notice: "",
   marked: false,
   words: [],
@@ -77,6 +76,8 @@ const WAVE_BARS = Array.from({ length: 24 }, (_, index) => `wave-${index + 1}`);
 
 export function Cockpit(): React.JSX.Element | null {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const answerShellRef = useRef<HTMLLabelElement>(null);
+  const impactFlipRef = useRef(false);
   const reviewRef = useRef<HTMLElement>(null);
   const commandRef = useRef<HTMLElement>(null);
   const phaseStatusRef = useRef<HTMLSpanElement>(null);
@@ -186,9 +187,9 @@ export function Cockpit(): React.JSX.Element | null {
         setPanel("none");
         return true;
       };
-      const runBusy = async (
-        operation: () => Promise<boolean | void>,
-        onSuccess: (result: boolean | void) => void,
+      const runBusy = async <T,>(
+        operation: () => Promise<T>,
+        onSuccess: (result: T) => void,
       ): Promise<void> => {
         if (!gate.start(session)) return;
         setCommandBusy(true);
@@ -445,12 +446,6 @@ export function Cockpit(): React.JSX.Element | null {
             </dd>
           </div>
           <div>
-            <dt>周预测</dt>
-            <dd data-testid="prediction-edition">
-              {identity?.predictionEdition ?? "—"}
-            </dd>
-          </div>
-          <div>
             <dt>题号</dt>
             <dd data-testid="question-id">{identity?.questionId ?? "—"}</dd>
           </div>
@@ -471,7 +466,9 @@ export function Cockpit(): React.JSX.Element | null {
         </button>
       </header>
 
-      <section className="practice-deck">
+      <section
+        className={`practice-deck${state.review ? " practice-deck--review" : ""}`}
+      >
         <div className="audio-ribbon">
           <div
             className={`wave wave--${state.audioStatus.toLocaleLowerCase("en-AU")}`}
@@ -482,7 +479,7 @@ export function Cockpit(): React.JSX.Element | null {
             ))}
           </div>
           <div>
-            <span className="eyebrow">FIREFLY ORIGINAL AUDIO</span>
+            <span className="eyebrow">萤火虫原音频</span>
             <strong data-testid="audio-status">
               {audioLabel(state.audioStatus, state.mode)}
             </strong>
@@ -493,7 +490,7 @@ export function Cockpit(): React.JSX.Element | null {
           </div>
         </div>
 
-        <label className="answer-shell">
+        <label className="answer-shell" ref={answerShellRef}>
           <span className="sr-only">输入听到的完整句子</span>
           <textarea
             ref={textareaRef}
@@ -513,6 +510,12 @@ export function Cockpit(): React.JSX.Element | null {
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
+              impactFlipRef.current = !impactFlipRef.current;
+              if (answerShellRef.current) {
+                answerShellRef.current.dataset.impact = impactFlipRef.current
+                  ? "a"
+                  : "b";
+              }
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
               saveTimerRef.current = setTimeout(
                 () => void controllerRef.current?.flushDraft(),
@@ -529,43 +532,36 @@ export function Cockpit(): React.JSX.Element | null {
           </span>
         </label>
 
-        <section
-          className="review"
-          ref={reviewRef}
-          tabIndex={state.phase === "REVIEW" ? 0 : -1}
-          data-testid="review-result"
-          aria-live="polite"
-        >
-          {state.review ? (
-            <>
-              <div className="review__score">
-                <span>准确率</span>
-                <strong>{Math.round(state.review.accuracy * 100)}%</strong>
-              </div>
-              <div className="error-list">
-                {state.review.errors.length === 0 ? (
-                  <p>全部词正确。</p>
-                ) : (
-                  enumerateErrors(state.review.errors).map(({ error, id }) => (
-                    <article key={id} className="error-chip">
-                      <span>{error.type}</span>
-                      <del>{error.actual || "∅"}</del>
-                      <ins>{error.expected || "∅"}</ins>
-                    </article>
-                  ))
-                )}
-              </div>
-              <p className="review__next">
-                <kbd>Enter</kbd> 下一题 · <kbd>T</kbd> 重做 · <kbd>K</kbd>{" "}
-                上一题
-              </p>
-            </>
-          ) : (
-            <p className="review__empty">
-              提交后只显示词级差异；不展示、保存完整正确句子。
+        {state.review && (
+          <section
+            className="review"
+            ref={reviewRef}
+            tabIndex={state.phase === "REVIEW" ? 0 : -1}
+            data-testid="review-result"
+            aria-live="polite"
+          >
+            <div className="review__score">
+              <span>准确率</span>
+              <strong>{Math.round(state.review.accuracy * 100)}%</strong>
+            </div>
+            <div className="error-list">
+              {state.review.errors.length === 0 ? (
+                <p>全部词正确。</p>
+              ) : (
+                enumerateErrors(state.review.errors).map(({ error, id }) => (
+                  <article key={id} className="error-chip">
+                    <span>{error.type}</span>
+                    <del>{error.actual || "∅"}</del>
+                    <ins>{error.expected || "∅"}</ins>
+                  </article>
+                ))
+              )}
+            </div>
+            <p className="review__next">
+              <kbd>Enter</kbd> 下一题 · <kbd>T</kbd> 重做 · <kbd>K</kbd> 上一题
             </p>
-          )}
-        </section>
+          </section>
+        )}
       </section>
 
       <footer className="statusbar">
@@ -581,9 +577,10 @@ export function Cockpit(): React.JSX.Element | null {
           <i />
           {state.phase}
         </span>
-        <span data-testid="site-status">站点 · {state.siteStatus}</span>
-        <span data-testid="index-status">索引 · {state.indexStatus}</span>
-        <span data-testid="hermes-status">记忆 · {state.hermesStatus}</span>
+        <span data-testid="site-status">{state.siteStatus}</span>
+        {state.indexStatus !== "IDLE" && (
+          <span data-testid="index-status">索引 {state.indexStatus}</span>
+        )}
         <span data-testid="practice-notice" aria-live="polite">
           {state.notice}
         </span>
@@ -653,6 +650,12 @@ export function Cockpit(): React.JSX.Element | null {
           >
             <kbd>?</kbd> 诊断帮助
           </button>
+          {state.fault.code === "DESYNC" && (
+            <p>
+              <kbd>Alt {state.keymap.next?.toUpperCase()}</kbd> 下一题 ·{" "}
+              <kbd>Alt {state.keymap.previous?.toUpperCase()}</kbd> 上一题
+            </p>
+          )}
           {panel === "help" && (
             <div className="recovery__help">
               <HelpPanel keymap={state.keymap} />
@@ -719,7 +722,7 @@ function CommandLayer({
           disabled={busy}
           onClick={() => onAction("ranked-review")}
         >
-          <kbd>Q</kbd> 记忆复习
+          <kbd>Q</kbd> 本地复习
         </button>
         <button
           type="button"
@@ -806,8 +809,8 @@ function RankedReview({
 }): React.JSX.Element {
   return (
     <section data-testid="ranked-review">
-      <h2>记忆复习</h2>
-      <p>Hermes 只排序插件提供的候选题；离线自动使用本地顺序。</p>
+      <h2>本地复习</h2>
+      <p>根据本机错题、准确率和练习时间排列。</p>
       <ol className="rank-list">
         {questionIds.slice(0, 30).map((questionId, index) => (
           <li key={questionId}>
@@ -834,7 +837,6 @@ function SettingsPanel({
   controller: PracticeController;
   state: CockpitViewState;
 }): React.JSX.Element {
-  const [pairingCode, setPairingCode] = useState("");
   const [keymap, setKeymap] = useState({
     ...DEFAULT_ALT_KEYMAP,
     ...state.keymap,
@@ -882,40 +884,8 @@ function SettingsPanel({
         保存快捷键
       </button>
 
-      <label className="pair-field">
-        Gateway 配对码
-        <input
-          value={pairingCode}
-          maxLength={12}
-          onChange={(event) =>
-            setPairingCode(event.currentTarget.value.toUpperCase())
-          }
-          autoComplete="off"
-        />
-      </label>
-      <div className="button-row">
-        <button
-          type="button"
-          disabled={!/^[A-HJ-NP-Z2-9]{12}$/u.test(pairingCode)}
-          onClick={async () => {
-            const ok = await controller.pairGateway(pairingCode);
-            if (ok) setPairingCode("");
-            setResult(ok ? "配对成功" : "配对失败；确认本机 Gateway 已启动");
-          }}
-        >
-          配对 Gateway
-        </button>
-        <button type="button" onClick={() => void controller.syncGateway()}>
-          立即同步
-        </button>
-        <button type="button" onClick={() => void controller.buildFullIndex()}>
-          建立完整题目索引
-        </button>
-      </div>
       <p aria-live="polite">{result}</p>
-      <p>
-        音频策略：site-player-only。令牌只保存在 Service Worker 可信存储上下文。
-      </p>
+      <p>快捷键只保存在本机浏览器中。</p>
     </section>
   );
 }

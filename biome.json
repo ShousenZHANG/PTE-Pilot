@@ -4,14 +4,14 @@
     "includes": [
       "**",
       "!.superpowers",
+      "!**/.claude",
       "!**/.wxt",
       "!**/.output",
       "!**/node_modules",
       "!**/coverage",
       "!**/test-results",
       "!**/playwright-report",
-      "!apps/gateway/data",
-      "!apps/gateway/dist",
+      "!PTE-Pilot-Chrome-latest",
       "!packages/*/dist"
     ]
   },
