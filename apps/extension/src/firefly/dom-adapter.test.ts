@@ -115,12 +115,11 @@ describe("FireflyDomAdapter prediction edition probe guard", () => {
   });
 });
 
-describe("FireflyDomAdapter APlayer controls", () => {
-  it("advertises Play when the active question uses hidden APlayer controls", () => {
+describe("FireflyDomAdapter site audio", () => {
+  it("advertises Play when the page exposes a unique audio element", () => {
     installFakeDom();
-    const player = new FakeElement("aplayer");
-    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
-    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
+    const audioElement = new FakeElement("site-audio");
+    audioElement.hidden = true;
     const input = new FakeElement("answer-input", 300, 80);
     const controls = [
       ["Score", "score"],
@@ -133,11 +132,9 @@ describe("FireflyDomAdapter APlayer controls", () => {
       control.setAttribute("aria-label", label ?? "");
       return control;
     });
-    player.setQuery(".aplayer-bar-wrap", [progress]);
-    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
     const document = {
       querySelectorAll(selector: string) {
-        if (selector === ".aplayer") return [player];
+        if (selector === "audio") return [audioElement];
         if (selector === "textarea") return [input];
         if (
           selector ===
@@ -150,104 +147,46 @@ describe("FireflyDomAdapter APlayer controls", () => {
     const adapter = new FireflyDomAdapter(document);
 
     expect(adapter.capabilities().play).toBe(true);
+    expect(adapter.siteAudioElements()).toEqual([audioElement]);
   });
 
-  it("drives the hidden APlayer play control, not the display-only Play div", () => {
+  it("falls back to the visible site play toggle when no semantic control exists", () => {
     installFakeDom();
-    const player = new FakeElement("aplayer");
-    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
-    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
-    const displayOnly = new FakeElement("audio-pause-btn", 80, 28);
-    player.setQuery(".aplayer-bar-wrap", [progress]);
-    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
+    const toggle = new FakeElement("audio-pause-btn", 80, 28);
     const document = {
       querySelectorAll(selector: string) {
-        if (selector === ".aplayer") return [player];
-        if (selector === ".audio-pause-btn") return [displayOnly];
+        return selector === ".audio-pause-btn" ? [toggle] : [];
+      },
+    } as unknown as Document;
+    const adapter = new FireflyDomAdapter(document);
+
+    adapter.playAudio();
+    expect(toggle.clicked).toBe(1);
+    adapter.pauseAudio();
+    expect(toggle.clicked).toBe(2);
+  });
+
+  it("prefers a unique semantic play control over the toggle div", () => {
+    installFakeDom();
+    const semantic = new FakeElement("play-button", 80, 28);
+    semantic.setAttribute("aria-label", "Play");
+    const toggle = new FakeElement("audio-pause-btn", 80, 28);
+    const document = {
+      querySelectorAll(selector: string) {
+        if (
+          selector ===
+          "button, [role='button'], input[type='button'], input[type='submit']"
+        )
+          return [semantic];
+        if (selector === ".audio-pause-btn") return [toggle];
         return [];
       },
     } as unknown as Document;
     const adapter = new FireflyDomAdapter(document);
-    const playAudio = (adapter as unknown as { playAudio?: () => void })
-      .playAudio;
 
-    expect(playAudio).toBeTypeOf("function");
-    playAudio?.call(adapter);
-    expect(hiddenPlay.clicked).toBe(1);
-    expect(displayOnly.clicked).toBe(0);
-  });
-
-  it("drives the hidden APlayer pause control", () => {
-    installFakeDom();
-    const player = new FakeElement("aplayer");
-    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
-    const hiddenPause = new FakeElement("aplayer-button aplayer-pause");
-    player.setQuery(".aplayer-bar-wrap", [progress]);
-    player.setQuery(".aplayer-button.aplayer-pause", [hiddenPause]);
-    const document = {
-      querySelectorAll(selector: string) {
-        return selector === ".aplayer" ? [player] : [];
-      },
-    } as unknown as Document;
-    const adapter = new FireflyDomAdapter(document);
-    const pauseAudio = (adapter as unknown as { pauseAudio?: () => void })
-      .pauseAudio;
-
-    expect(pauseAudio).toBeTypeOf("function");
-    pauseAudio?.call(adapter);
-    expect(hiddenPause.clicked).toBe(1);
-  });
-
-  it("restarts the one-item APlayer and resumes it when paused", () => {
-    installFakeDom();
-    const player = new FakeElement("aplayer");
-    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
-    const listItem = new FakeElement("aplayer-list-item");
-    const back = new FakeElement("aplayer-icon aplayer-icon-back");
-    const hiddenPlay = new FakeElement("aplayer-button aplayer-play");
-    player.setQuery(".aplayer-bar-wrap", [progress]);
-    player.setQuery(".aplayer-list li", [listItem]);
-    player.setQuery(".aplayer-icon-back", [back]);
-    player.setQuery(".aplayer-button.aplayer-play", [hiddenPlay]);
-    const document = {
-      querySelectorAll(selector: string) {
-        return selector === ".aplayer" ? [player] : [];
-      },
-    } as unknown as Document;
-    const adapter = new FireflyDomAdapter(document);
-    const restartAudio = (adapter as unknown as { restartAudio?: () => void })
-      .restartAudio;
-
-    expect(restartAudio).toBeTypeOf("function");
-    restartAudio?.call(adapter);
-    expect(back.clicked).toBe(1);
-    expect(hiddenPlay.clicked).toBe(1);
-  });
-
-  it("refuses APlayer replay when playlist ownership is ambiguous", () => {
-    installFakeDom();
-    const player = new FakeElement("aplayer");
-    const progress = new FakeElement("aplayer-bar-wrap", 120, 8);
-    const back = new FakeElement("aplayer-icon aplayer-icon-back");
-    player.setQuery(".aplayer-bar-wrap", [progress]);
-    player.setQuery(".aplayer-list li", [
-      new FakeElement("aplayer-list-item"),
-      new FakeElement("aplayer-list-item"),
-    ]);
-    player.setQuery(".aplayer-icon-back", [back]);
-    const document = {
-      querySelectorAll(selector: string) {
-        return selector === ".aplayer" ? [player] : [];
-      },
-    } as unknown as Document;
-    const adapter = new FireflyDomAdapter(document);
-    const restartAudio = (adapter as unknown as { restartAudio?: () => void })
-      .restartAudio;
-
-    expect(() => restartAudio?.call(adapter)).toThrow(
-      "audio:playlist:ambiguous",
-    );
-    expect(back.clicked).toBe(0);
+    adapter.playAudio();
+    expect(semantic.clicked).toBe(1);
+    expect(toggle.clicked).toBe(0);
   });
 });
 

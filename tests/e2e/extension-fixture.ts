@@ -26,6 +26,7 @@ export const test = base.extend<ExtensionFixtures>({
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
+        "--autoplay-policy=no-user-gesture-required",
       ],
     });
     await use(context);

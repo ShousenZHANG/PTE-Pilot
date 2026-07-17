@@ -23,7 +23,11 @@ export interface AnswerSitePort {
   isScoreComplete(): boolean;
   click(name: "redo"): void;
   capabilities(): { redo: boolean };
-  readRevealedAnswer(proof: RevealedAnswerProof): string;
+  readRevealedContent(proof: RevealedAnswerProof): {
+    answer: string;
+    translation: string | null;
+  };
+  dismissRevealDialog(): Promise<boolean>;
   input(): HTMLTextAreaElement;
 }
 
@@ -60,9 +64,13 @@ export class AnswerGate {
   async submit(draft: string): Promise<SubmitResult> {
     if (this.#activeToken !== null)
       throw new Error("submission:already-active");
+    // A leftover score dialog (site quirk, earlier failure) must not block a
+    // new submission: close it best-effort; the adapter's fingerprint and
+    // ownership rules still fail closed if stale content survives.
+    if (this.#site.revealSignature().visible) {
+      await this.#site.dismissRevealDialog();
+    }
     const identity = this.#site.readIdentity();
-    if (this.#site.revealSignature().visible)
-      throw new Error("submission:answer-already-visible");
     const attemptEpoch = ++this.#attemptEpoch;
     const submissionToken = crypto.randomUUID();
     const context: SubmissionContext = {
@@ -93,14 +101,26 @@ export class AnswerGate {
         this.assertRevealProof(revealProof, identity, context, "answer");
       }
       this.assertCurrent(context);
-      const correctAnswer = this.#site.readRevealedAnswer(revealProof);
+      const { answer: correctAnswer, translation } =
+        this.#site.readRevealedContent(revealProof);
       const diff = diffWords(correctAnswer, draft);
       return {
         context,
-        review: { accuracy: diff.accuracy, errors: diff.errors },
+        review: {
+          accuracy: diff.accuracy,
+          errors: diff.errors,
+          correctCount: diff.correctCount,
+          totalWords: diff.expectedTokens.length,
+          segments: diff.segments,
+          answerText: correctAnswer,
+          translation,
+        },
       };
     } finally {
       if (this.#activeToken === submissionToken) this.#activeToken = null;
+      // The site's score dialog stays hidden under the cockpit; close it so
+      // redo/navigation land on a clean page even after a failed submission.
+      void this.#site.dismissRevealDialog().catch(() => undefined);
     }
   }
 

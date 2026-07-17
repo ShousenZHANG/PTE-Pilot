@@ -254,6 +254,14 @@ kbd {
   white-space: nowrap;
 }
 
+.audio-time {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .audio-track {
   position: relative;
   height: 6px;
@@ -269,16 +277,13 @@ kbd {
   width: 0;
   border-radius: 3px;
   background: var(--blue);
+  transition: width 0.2s linear;
 }
 
-.audio-box[data-audio="PLAYING"] .audio-fill {
+/* No live element to read: fall back to an indeterminate sweep. */
+.audio-box[data-audio="PLAYING"][data-live="false"] .audio-fill {
   width: 38%;
   animation: audio-sweep 1.5s linear infinite;
-}
-
-.audio-box[data-audio="PAUSED"] .audio-fill {
-  width: 38%;
-  transform: translateX(82%);
 }
 
 .audio-box[data-audio="ENDED"] .audio-fill {
@@ -314,6 +319,89 @@ kbd {
 .answer-shell:focus-within {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px var(--blue-soft);
+}
+
+/*
+ * Keystroke feedback, compositor-only: the rail animates transform and
+ * opacity on its own pseudo-element layer, so typing latency stays at zero.
+ */
+.answer-shell::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  height: 2px;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--blue), transparent);
+  opacity: 0;
+  transform: scaleX(0.1);
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+.answer-shell {
+  position: relative;
+}
+
+.answer-shell[data-impact="a"]::after {
+  animation: impact-rail-a 140ms ease-out;
+}
+
+.answer-shell[data-impact="b"]::after {
+  animation: impact-rail-b 140ms ease-out;
+}
+
+@keyframes impact-rail-a {
+  30% {
+    opacity: 0.85;
+    transform: scaleX(0.45);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(0.95);
+  }
+}
+
+@keyframes impact-rail-b {
+  30% {
+    opacity: 0.85;
+    transform: scaleX(0.45);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(0.95);
+  }
+}
+
+.answer-foot output {
+  display: inline-block;
+}
+
+.answer-foot output[data-pop="a"] {
+  animation: count-pop-a 150ms ease-out;
+}
+
+.answer-foot output[data-pop="b"] {
+  animation: count-pop-b 150ms ease-out;
+}
+
+@keyframes count-pop-a {
+  35% {
+    transform: translateY(-1.5px) scale(1.06);
+  }
+}
+
+@keyframes count-pop-b {
+  35% {
+    transform: translateY(-1.5px) scale(1.06);
+  }
+}
+
+/* Exam realism: no typing effects in exam mode. */
+.cockpit--exam .answer-shell::after {
+  display: none;
 }
 
 .answer-shell textarea {
@@ -363,62 +451,87 @@ kbd {
 
 .review {
   display: grid;
-  grid-template-columns: 112px 1fr auto;
-  align-items: center;
-  gap: 20px;
+  gap: 10px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--blue);
   border-radius: 4px;
-  padding: 14px 18px;
+  padding: 15px 20px 13px;
   background: var(--surface);
 }
 
-.review__score {
-  display: grid;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.review__score strong {
-  color: var(--blue);
-  font-size: 32px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.15;
-}
-
-.error-list {
+.review__head {
   display: flex;
-  max-height: 104px;
-  gap: 8px;
-  overflow: auto;
+  align-items: baseline;
+  gap: 16px;
 }
 
-.error-chip {
-  display: grid;
-  flex: 0 0 auto;
-  min-width: 116px;
-  border: 1px solid #eddad7;
-  border-left: 2px solid var(--danger);
-  border-radius: 3px;
-  padding: 6px 10px;
-  background: #fdf4f3;
+.review__title {
+  color: var(--bar);
+  font-size: 15px;
 }
 
-.error-chip span {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.review__legend {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 11.5px;
 }
 
-.error-chip del {
-  color: var(--danger);
-}
-
-.error-chip ins {
-  color: var(--ok);
+.review__pill {
+  color: var(--blue);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
   font-weight: 700;
-  text-decoration: none;
+}
+
+.score-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line-soft);
+}
+
+.score-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--blue);
+}
+
+.score-line {
+  margin: 0;
+  font-size: 16.5px;
+  line-height: 1.8;
+}
+
+.w-ok {
+  color: var(--ok);
+}
+
+.w-omit {
+  color: var(--danger);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.w-err {
+  color: #8a949e;
+  text-decoration: line-through;
+}
+
+.review__answer {
+  margin: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+  color: var(--ink);
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.review__translation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
 }
 
 .review__next {
@@ -711,10 +824,7 @@ input {
     display: none;
   }
 
-  .review {
-    grid-template-columns: 90px 1fr;
-  }
-
+  .review__legend,
   .review__next {
     display: none;
   }

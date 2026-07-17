@@ -55,7 +55,6 @@ export type MainPhase = z.infer<typeof MainPhaseSchema>;
 
 export const AudioStatusSchema = z.enum([
   "EMPTY",
-  "RESOLVING",
   "READY",
   "PLAYING",
   "PAUSED",

@@ -37,6 +37,21 @@ function isVisible(element: Element): boolean {
   return rect.width > 0 || rect.height > 0;
 }
 
+/*
+ * Firefly's AI score dialog (and any other modal) can contain text such as
+ * "7/10" that would otherwise be indistinguishable from the question position
+ * label. Question identity, controls, and edition facts must only ever come
+ * from the exercise surface, never from a transient overlay.
+ */
+function outsideTransientOverlays(element: Element): boolean {
+  if (typeof element.closest !== "function") return true;
+  return (
+    element.closest(
+      ".el-dialog__wrapper, .el-message-box__wrapper, [role='dialog'], [role='alertdialog']",
+    ) === null
+  );
+}
+
 function semanticLabel(element: Element): string {
   return normalizeLabel(
     element.getAttribute("aria-label") ??
@@ -168,6 +183,13 @@ type FireflyScoreAnswerState = {
 export class FireflyDomAdapter {
   readonly #document: Document;
   readonly #predictionEditionOverride = new PredictionEditionOverrideState();
+  /*
+   * Fingerprints of answers this session has already read, keyed to the
+   * question that owns them. Lets a same-question resubmission be accepted
+   * even though the dialog content (and therefore its fingerprint) cannot
+   * change, while a stale answer from another question keeps failing closed.
+   */
+  readonly #acceptedAnswerOwners = new Map<string, string>();
   #activeRevealBinding:
     | {
         kind: "explicit";
@@ -235,8 +257,10 @@ export class FireflyDomAdapter {
       redo: this.findControls("redo").length === 1,
       play:
         this.findControls("play").length === 1 ||
-        this.visibleAudioElements().length === 1 ||
-        this.hasAPlayerControl("play"),
+        this.siteAudioElements().length === 1 ||
+        Array.from(
+          this.#document.querySelectorAll<HTMLElement>(".audio-pause-btn"),
+        ).filter(isVisible).length === 1,
       select: this.supportsDirectSelection(),
     };
   }
@@ -259,6 +283,7 @@ export class FireflyDomAdapter {
       ),
     )
       .filter(isVisible)
+      .filter(outsideTransientOverlays)
       .map((element) =>
         parseQuestionId(
           element.dataset.questionId ??
@@ -353,29 +378,11 @@ export class FireflyDomAdapter {
   }
 
   playAudio(): void {
-    this.audioControl("play").click();
+    this.audioToggleControl("play").click();
   }
 
   pauseAudio(): void {
-    this.audioControl("pause").click();
-  }
-
-  restartAudio(): void {
-    const player = this.activeAPlayer();
-    resolveUnique(
-      Array.from(player.querySelectorAll<HTMLElement>(".aplayer-list li")),
-      "audio:playlist",
-    );
-    resolveUnique(
-      Array.from(player.querySelectorAll<HTMLElement>(".aplayer-icon-back")),
-      "audio:restart",
-    ).click();
-    const pausedPlayControls = Array.from(
-      player.querySelectorAll<HTMLElement>(".aplayer-button.aplayer-play"),
-    );
-    if (pausedPlayControls.length > 1)
-      resolveUnique(pausedPlayControls, "audio:play");
-    pausedPlayControls[0]?.click();
+    this.audioToggleControl("pause").click();
   }
 
   writeAnswer(value: string): void {
@@ -418,7 +425,7 @@ export class FireflyDomAdapter {
     this.#activeRevealBinding = null;
     const beforeExplicitReveal = this.explicitRevealSignature();
     const beforeFireflyReveal = this.fireflyScoreAnswerState();
-    if (this.revealSignature().visible)
+    if (beforeExplicitReveal.visible)
       throw new Error("score:answer-already-visible");
     if (this.explicitRevealNodes().some((node) => answerTextLength(node) > 0))
       throw new Error("score:stale-answer-residue");
@@ -435,9 +442,13 @@ export class FireflyDomAdapter {
           return { kind: "explicit-reveal" } as const;
         }
         if (
-          fireflyAnswerTransitioned(beforeFireflyReveal, afterFireflyReveal) &&
+          afterFireflyReveal.candidateCount === 1 &&
+          afterFireflyReveal.visible &&
           afterFireflyReveal.node &&
-          afterFireflyReveal.fingerprint
+          afterFireflyReveal.fingerprint &&
+          (afterFireflyReveal.fingerprint !== beforeFireflyReveal.fingerprint ||
+            this.#acceptedAnswerOwners.get(afterFireflyReveal.fingerprint) ===
+              expected.questionId)
         ) {
           return {
             kind: "firefly-reveal",
@@ -497,6 +508,13 @@ export class FireflyDomAdapter {
   }
 
   readRevealedAnswer(proof: RevealedAnswerProof): string {
+    return this.readRevealedContent(proof).answer;
+  }
+
+  readRevealedContent(proof: RevealedAnswerProof): {
+    answer: string;
+    translation: string | null;
+  } {
     const binding = this.#activeRevealBinding;
     if (!binding || binding.proof !== proof)
       throw new Error("answer:unproven-reveal");
@@ -520,8 +538,39 @@ export class FireflyDomAdapter {
       throw new Error("answer:reveal-changed");
     const answer = normalizeLabel(node.textContent);
     if (answer.length === 0) throw new Error("answer:empty");
+    const translation =
+      binding.kind === "firefly-score" ? readDialogTranslation(node) : null;
+    if (binding.kind === "firefly-score") {
+      if (this.#acceptedAnswerOwners.size > 512)
+        this.#acceptedAnswerOwners.clear();
+      this.#acceptedAnswerOwners.set(binding.fingerprint, proof.questionId);
+    }
     this.#activeRevealBinding = null;
-    return answer;
+    return { answer, translation };
+  }
+
+  async dismissRevealDialog(timeoutMs = 1_200): Promise<boolean> {
+    const deadline = performance.now() + timeoutMs;
+    for (;;) {
+      const wrappers = this.visibleScoreDialogWrappers();
+      if (wrappers.length === 0) return true;
+      for (const wrapper of wrappers) {
+        const close = wrapper.querySelector<HTMLElement>(
+          ".el-dialog__headerbtn, [aria-label='Close'], [aria-label='关闭']",
+        );
+        (close ?? wrapper).click();
+      }
+      try {
+        this.#document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      } catch {
+        // Some documents under test do not implement dispatchEvent.
+      }
+      if (performance.now() >= deadline)
+        return this.visibleScoreDialogWrappers().length === 0;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
   }
 
   questionOptions(): QuestionIdentity[] | null {
@@ -570,10 +619,13 @@ export class FireflyDomAdapter {
     target.click();
   }
 
-  visibleAudioElements(): HTMLAudioElement[] {
-    return Array.from(this.#document.querySelectorAll("audio")).filter(
-      isVisible,
-    );
+  /*
+   * The site's audio element is usually hidden (no controls attribute), so
+   * this deliberately skips visibility checks. Direct element control is what
+   * removes the site player's start-up delay.
+   */
+  siteAudioElements(): HTMLAudioElement[] {
+    return Array.from(this.#document.querySelectorAll("audio"));
   }
 
   observeQuestionChanges(
@@ -609,46 +661,20 @@ export class FireflyDomAdapter {
       this.#document.querySelectorAll<HTMLElement>(selector),
     ).filter(
       (element) =>
-        isVisible(element) && matchesControlLabel(name, semanticLabel(element)),
+        isVisible(element) &&
+        outsideTransientOverlays(element) &&
+        matchesControlLabel(name, semanticLabel(element)),
     );
   }
 
-  private activeAPlayer(): HTMLElement {
-    const players = Array.from(
-      this.#document.querySelectorAll<HTMLElement>(".aplayer"),
-    ).filter(
-      (player) =>
-        Array.from(
-          player.querySelectorAll<HTMLElement>(".aplayer-bar-wrap"),
-        ).filter(isVisible).length === 1,
-    );
-    return resolveUnique(players, "audio:player");
-  }
-
-  private audioControl(action: "play" | "pause"): HTMLElement {
+  private audioToggleControl(action: "play" | "pause"): HTMLElement {
     const semanticControls = this.findControls(action);
-    return semanticControls.length > 0
-      ? resolveUnique(semanticControls, `audio:${action}`)
-      : resolveUnique(
-          Array.from(
-            this.activeAPlayer().querySelectorAll<HTMLElement>(
-              `.aplayer-button.aplayer-${action}`,
-            ),
-          ),
-          `audio:${action}`,
-        );
-  }
-
-  private hasAPlayerControl(action: "play" | "pause"): boolean {
-    try {
-      return (
-        this.activeAPlayer().querySelectorAll(
-          `.aplayer-button.aplayer-${action}`,
-        ).length === 1
-      );
-    } catch {
-      return false;
-    }
+    if (semanticControls.length > 0)
+      return resolveUnique(semanticControls, `audio:${action}`);
+    const toggles = Array.from(
+      this.#document.querySelectorAll<HTMLElement>(".audio-pause-btn"),
+    ).filter(isVisible);
+    return resolveUnique(toggles, `audio:${action}`);
   }
 
   private findInputs(): HTMLTextAreaElement[] {
@@ -668,7 +694,9 @@ export class FireflyDomAdapter {
       this.#document.querySelectorAll<HTMLElement>(
         "[data-question-id], [data-exercise-id], [aria-label], h1, h2, h3, h4, span, strong, b, label, li",
       ),
-    ).filter(isVisible);
+    )
+      .filter(isVisible)
+      .filter(outsideTransientOverlays);
   }
 
   private questionSelect(): HTMLSelectElement | null {
@@ -737,6 +765,14 @@ export class FireflyDomAdapter {
         ".el-dialog__wrapper.ai-score pre",
       ),
     ).filter((node) => node.querySelector("span.oneword") !== null);
+  }
+
+  private visibleScoreDialogWrappers(): HTMLElement[] {
+    return Array.from(
+      this.#document.querySelectorAll<HTMLElement>(
+        ".el-dialog__wrapper.ai-score",
+      ),
+    ).filter(isVisible);
   }
 
   private fireflyScoreAnswerState(): FireflyScoreAnswerState {
@@ -924,11 +960,13 @@ export class FireflyDomAdapter {
       this.#document.querySelectorAll<HTMLElement>("[data-prediction-edition]"),
     )
       .filter(isVisible)
+      .filter(outsideTransientOverlays)
       .map((element) => element.dataset.predictionEdition ?? "");
     const headingTexts = Array.from(
       this.#document.querySelectorAll<HTMLElement>("h1, h2, h3, h4"),
     )
       .filter(isVisible)
+      .filter(outsideTransientOverlays)
       .map((element) => element.textContent ?? "");
     const optionQuestionIds = Array.from(this.questionSelect()?.options ?? [])
       .map(
@@ -961,6 +999,7 @@ export class FireflyDomAdapter {
       this.#document.querySelectorAll<HTMLElement>("[data-question-tag]"),
     )
       .filter(isVisible)
+      .filter(outsideTransientOverlays)
       .map((element) =>
         normalizeLabel(element.dataset.questionTag ?? element.textContent),
       )
@@ -1122,23 +1161,24 @@ function revealTransitioned(
   );
 }
 
-function fireflyAnswerTransitioned(
-  before: FireflyScoreAnswerState,
-  after: FireflyScoreAnswerState,
-): boolean {
-  return (
-    !before.visible &&
-    after.candidateCount === 1 &&
-    after.visible &&
-    after.node !== null &&
-    after.fingerprint !== null &&
-    after.fingerprint !== before.fingerprint
-  );
-}
-
 function answerFingerprint(node: HTMLElement): string | null {
   const answer = normalizeLabel(node.textContent);
   return answer.length > 0 ? fnv1a64(answer) : null;
+}
+
+function readDialogTranslation(answerNode: HTMLElement): string | null {
+  try {
+    const body = answerNode.closest(".el-dialog__body");
+    if (!body) return null;
+    const label = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5")).find(
+      (heading) =>
+        /^(?:译文|translation)$/iu.test(normalizeLabel(heading.textContent)),
+    );
+    const text = label?.nextElementSibling?.textContent?.trim() ?? "";
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 function sameQuestionIdentity(

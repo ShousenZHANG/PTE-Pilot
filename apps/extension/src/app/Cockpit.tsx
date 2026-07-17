@@ -74,6 +74,11 @@ const INITIAL_STATE: CockpitViewState = {
 
 export function Cockpit(): React.JSX.Element | null {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const answerShellRef = useRef<HTMLLabelElement>(null);
+  const impactFlipRef = useRef(false);
+  const audioBoxRef = useRef<HTMLDivElement>(null);
+  const audioFillRef = useRef<HTMLElement>(null);
+  const audioTimeRef = useRef<HTMLSpanElement>(null);
   const reviewRef = useRef<HTMLElement>(null);
   const commandRef = useRef<HTMLElement>(null);
   const phaseStatusRef = useRef<HTMLSpanElement>(null);
@@ -317,6 +322,30 @@ export function Cockpit(): React.JSX.Element | null {
 
   useEffect(() => {
     if (!open) return;
+    const update = () => {
+      const snap = controllerRef.current?.audioSnapshot() ?? null;
+      const box = audioBoxRef.current;
+      const fill = audioFillRef.current;
+      const time = audioTimeRef.current;
+      if (box) box.dataset.live = snap ? "true" : "false";
+      if (!fill || !time) return;
+      if (snap && snap.duration > 0) {
+        const percent = Math.min(100, (snap.currentTime / snap.duration) * 100);
+        fill.style.width = `${percent.toFixed(1)}%`;
+        time.textContent = `${formatAudioClock(snap.currentTime)} / ${formatAudioClock(snap.duration)}`;
+      } else {
+        fill.style.width = "";
+        time.textContent = "";
+      }
+    };
+    update();
+    if (state.audioStatus !== "PLAYING") return;
+    const interval = setInterval(update, 200);
+    return () => clearInterval(interval);
+  }, [state.audioStatus, open]);
+
+  useEffect(() => {
+    if (!open) return;
     if (state.phase === "ANSWERING")
       textareaRef.current?.focus({ preventScroll: true });
     if (state.phase === "REVIEW")
@@ -434,6 +463,12 @@ export function Cockpit(): React.JSX.Element | null {
 
   if (!open) return null;
   const identity = state.identity;
+  const review = state.review;
+  const scorePercent = review
+    ? review.totalWords > 0
+      ? Math.round((review.correctCount / review.totalWords) * 100)
+      : 100
+    : 0;
   const writable = state.phase === "ANSWERING";
   const renderedCommandSession = commandSessionRef.current.current;
 
@@ -481,22 +516,27 @@ export function Cockpit(): React.JSX.Element | null {
           hear the sentence only once.
         </p>
 
-        <div className="audio-box" data-audio={state.audioStatus}>
+        <div
+          className="audio-box"
+          data-audio={state.audioStatus}
+          ref={audioBoxRef}
+        >
           <div className="audio-box__row">
             <strong data-testid="audio-status">
               {audioLabel(state.audioStatus, state.mode)}
             </strong>
+            <span className="audio-time" ref={audioTimeRef} />
             <span className="key-hints" aria-hidden="true">
               <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd> 播放 / 暂停
               <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd> 重播
             </span>
           </div>
           <div className="audio-track" aria-hidden="true">
-            <i className="audio-fill" />
+            <i className="audio-fill" ref={audioFillRef} />
           </div>
         </div>
 
-        <label className="answer-shell">
+        <label className="answer-shell" ref={answerShellRef}>
           <span className="sr-only">输入听到的完整句子</span>
           <textarea
             ref={textareaRef}
@@ -516,6 +556,12 @@ export function Cockpit(): React.JSX.Element | null {
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
+              impactFlipRef.current = !impactFlipRef.current;
+              if (answerShellRef.current) {
+                answerShellRef.current.dataset.impact = impactFlipRef.current
+                  ? "a"
+                  : "b";
+              }
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
               saveTimerRef.current = setTimeout(
                 () => void controllerRef.current?.flushDraft(),
@@ -532,7 +578,7 @@ export function Cockpit(): React.JSX.Element | null {
           </span>
         </label>
 
-        {state.review && (
+        {review && (
           <section
             className="review"
             ref={reviewRef}
@@ -540,25 +586,55 @@ export function Cockpit(): React.JSX.Element | null {
             data-testid="review-result"
             aria-live="polite"
           >
-            <div className="review__score">
-              <span>准确率</span>
-              <strong>{Math.round(state.review.accuracy * 100)}%</strong>
+            <header className="review__head">
+              <strong className="review__title">AI 评分</strong>
+              <span className="review__legend" aria-hidden="true">
+                <span className="w-ok">Correct</span>
+                <del className="w-err">Error</del>
+                <em className="w-omit">(Omit)</em>
+              </span>
+              <span className="review__pill" data-testid="review-score">
+                {review.correctCount}/{review.totalWords}
+              </span>
+            </header>
+            <div className="score-bar" aria-hidden="true">
+              <i style={{ width: `${scorePercent}%` }} />
             </div>
-            <div className="error-list">
-              {state.review.errors.length === 0 ? (
-                <p>全部词正确。</p>
-              ) : (
-                enumerateErrors(state.review.errors).map(({ error, id }) => (
-                  <article key={id} className="error-chip">
-                    <span>{error.type}</span>
-                    <del>{error.actual || "∅"}</del>
-                    <ins>{error.expected || "∅"}</ins>
-                  </article>
-                ))
-              )}
-            </div>
+            <p className="score-line" data-testid="score-line">
+              {enumerateSegments(review.segments).map(({ segment, id }) => {
+                if (segment.kind === "correct")
+                  return (
+                    <span key={id} className="w-ok">
+                      {segment.text}{" "}
+                    </span>
+                  );
+                if (segment.kind === "omit")
+                  return (
+                    <em key={id} className="w-omit">
+                      ({segment.text}){" "}
+                    </em>
+                  );
+                return (
+                  <del key={id} className="w-err">
+                    {segment.text}{" "}
+                  </del>
+                );
+              })}
+            </p>
+            <p className="review__answer" data-testid="review-answer">
+              {review.answerText}
+            </p>
+            {review.translation && (
+              <p
+                className="review__translation"
+                data-testid="review-translation"
+              >
+                {review.translation}
+              </p>
+            )}
             <p className="review__next">
               <kbd>Enter</kbd> 下一题 · <kbd>T</kbd> 重做 · <kbd>K</kbd> 上一题
+              · <kbd>R</kbd> 重播
             </p>
           </section>
         )}
@@ -978,18 +1054,18 @@ function isEditableEventTarget(event: KeyboardEvent): boolean {
   );
 }
 
-function enumerateErrors(
-  errors: NonNullable<CockpitViewState["review"]>["errors"],
+function enumerateSegments(
+  segments: NonNullable<CockpitViewState["review"]>["segments"],
 ): Array<{
-  error: NonNullable<CockpitViewState["review"]>["errors"][number];
+  segment: NonNullable<CockpitViewState["review"]>["segments"][number];
   id: string;
 }> {
   const seen = new Map<string, number>();
-  return errors.map((error) => {
-    const base = `${error.type}:${error.expected}:${error.actual}`;
+  return segments.map((segment) => {
+    const base = `${segment.kind}:${segment.text}`;
     const occurrence = (seen.get(base) ?? 0) + 1;
     seen.set(base, occurrence);
-    return { error, id: `${base}:${occurrence}` };
+    return { segment, id: `${base}:${occurrence}` };
   });
 }
 
@@ -1001,7 +1077,16 @@ function updateWordCount(
   const count = textarea.value.trim()
     ? textarea.value.trim().split(/\s+/u).length
     : 0;
-  output.value = `Total Word Count: ${count}`;
+  const next = `Total Word Count: ${count}`;
+  if (output.value === next) return;
+  output.value = next;
+  output.dataset.pop = output.dataset.pop === "a" ? "b" : "a";
+}
+
+function formatAudioClock(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const minutes = String(Math.floor(whole / 60)).padStart(2, "0");
+  return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
 }
 
 function audioLabel(status: string, mode: PracticeMode): string {

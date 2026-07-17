@@ -8,6 +8,7 @@ import type {
   WordStatSummary,
 } from "@pte-pilot/contracts";
 import type {
+  AdapterDiagnostic,
   IndexedQuestion,
   IndexSnapshot,
   PracticeMode,
@@ -17,7 +18,7 @@ import type {
   ReviewResult,
 } from "../domain/types";
 import { AnswerGate } from "../firefly/answer-gate";
-import { AudioBroker } from "../firefly/audio-broker";
+import { AudioBroker, type AudioSnapshot } from "../firefly/audio-broker";
 import {
   FireflyDomAdapter,
   isVerifiedQuestionSetEdition,
@@ -118,6 +119,21 @@ export function predictionEditionStartupMode(
     : "reject";
 }
 
+/*
+ * The Firefly page re-renders in bursts (question switch, dialog close,
+ * skeleton load). A missing or ambiguous control in that window is transient,
+ * not a site change, so the initial probe deserves a short grace period
+ * before failing closed. Auth failures and unverified editions are
+ * deterministic and never retried.
+ */
+export function shouldRetryProbe(diagnostic: AdapterDiagnostic): boolean {
+  return (
+    diagnostic.code !== "AUTH_REQUIRED" &&
+    diagnostic.detail !== "question:prediction-edition-unverified" &&
+    /:(?:missing|ambiguous)$/u.test(diagnostic.detail)
+  );
+}
+
 export function canPersistPredictionEdition(edition: string): boolean {
   return !["session:", "provisional:"].some((prefix) =>
     edition.startsWith(prefix),
@@ -199,7 +215,8 @@ export class PracticeController extends EventTarget {
       await preflight;
       if (!this.isCurrentInitialization(generation)) return;
     }
-    let probe = this.#site.probe();
+    let probe = await this.probeWithGrace(generation);
+    if (!this.isCurrentInitialization(generation)) return;
     if (predictionEditionStartupMode(probe) === "session") {
       this.#site.beginSessionPredictionEdition();
       probe = this.#site.probe();
@@ -228,10 +245,7 @@ export class PracticeController extends EventTarget {
     this.#answerGate = new AnswerGate(this.#site);
     this.#answerGate.setNavigationEpoch(this.#navigation.epoch);
     this.#latestNavigationEpoch = this.#navigation.epoch;
-    const audio = new AudioBroker(this.#site, {
-      begin: (binding) => this.#runtime.beginAudioCapture(binding),
-      cancel: (binding) => this.#runtime.cancelAudioCapture(binding),
-    });
+    const audio = new AudioBroker(this.#site);
     this.#audio = audio;
     audio.addEventListener("statechange", (event) => {
       if (!this.isCurrentInitialization(generation) || this.#audio !== audio)
@@ -674,6 +688,10 @@ export class PracticeController extends EventTarget {
     } finally {
       this.#audioCommandPending = false;
     }
+  }
+
+  audioSnapshot(): AudioSnapshot | null {
+    return this.#audio?.snapshot() ?? null;
   }
 
   async restartAudio(): Promise<void> {
@@ -1211,6 +1229,22 @@ export class PracticeController extends EventTarget {
       if (this.#indexer === indexer && this.isCurrentInitialization(generation))
         this.patch({ indexStatus: "FAILED" });
     }
+  }
+
+  private async probeWithGrace(generation: number): Promise<ProbeResult> {
+    const deadline = performance.now() + 2_500;
+    let probe = this.#site.probe();
+    while (
+      !probe.ok &&
+      shouldRetryProbe(probe.diagnostic) &&
+      performance.now() < deadline &&
+      this.isCurrentInitialization(generation)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (!this.isCurrentInitialization(generation)) return probe;
+      probe = this.#site.probe();
+    }
+    return probe;
   }
 
   private isCurrentInitialization(generation: number): boolean {

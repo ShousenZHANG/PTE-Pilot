@@ -14,7 +14,6 @@ export type PracticePhase =
 
 export type AudioState =
   | "EMPTY"
-  | "RESOLVING"
   | "READY"
   | "PLAYING"
   | "PAUSED"
@@ -126,13 +125,19 @@ export interface IndexSnapshot {
   schemaVersion: number;
 }
 
-export interface AudioBindingKey {
-  questionId: string;
-  navigationEpoch: number;
-  captureToken: string;
+export type ScoreSegmentKind = "correct" | "omit" | "error";
+
+export interface ScoreSegment {
+  kind: ScoreSegmentKind;
+  text: string;
 }
 
 export interface ReviewResult {
   accuracy: number;
   errors: WordError[];
+  correctCount: number;
+  totalWords: number;
+  segments: ScoreSegment[];
+  answerText: string;
+  translation: string | null;
 }

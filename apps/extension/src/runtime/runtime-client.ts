@@ -12,24 +12,10 @@ import {
   type UserSettings,
   type WordStatSummary,
 } from "@pte-pilot/contracts";
-import type { AudioBindingKey } from "../domain/types";
-import {
-  type AudioCaptureEvent,
-  AudioCaptureEventSchema,
-  type AudioCaptureHandle,
-  AudioCaptureResponseSchema,
-} from "./audio-messages";
 
 type RuntimeAction = RuntimeRequest["action"];
 
 export class RuntimeClient {
-  readonly #audioCaptureTimeoutMs: number;
-  readonly #audioWaiters = new Map<string, { fail(error: Error): void }>();
-
-  constructor(audioCaptureTimeoutMs = 4_500) {
-    this.#audioCaptureTimeoutMs = audioCaptureTimeoutMs;
-  }
-
   async loadDraft(
     predictionEdition: string,
     questionId: string,
@@ -160,96 +146,6 @@ export class RuntimeClient {
     return assertAction(response, "storage/listWordStats").words;
   }
 
-  async beginAudioCapture(
-    binding: AudioBindingKey,
-    armedAt = Date.now(),
-  ): Promise<AudioCaptureHandle> {
-    const observation = this.waitForAudioCapture(binding);
-    const request = {
-      requestId: crypto.randomUUID(),
-      action: "audio/captureBegin" as const,
-      binding,
-      armedAt,
-    };
-    try {
-      const raw = await browser.runtime.sendMessage(request);
-      const response = AudioCaptureResponseSchema.parse(raw);
-      if (
-        !response.ok ||
-        response.action !== request.action ||
-        response.requestId !== request.requestId
-      ) {
-        throw new Error(`audio:capture-begin:${response.reason ?? "failed"}`);
-      }
-    } catch (error) {
-      this.#audioWaiters
-        .get(binding.captureToken)
-        ?.fail(asError(error, "audio:capture-begin:failed"));
-      void observation.catch(() => undefined);
-      throw error;
-    }
-    return { armedAt, observation };
-  }
-
-  async cancelAudioCapture(binding: AudioBindingKey): Promise<void> {
-    this.#audioWaiters
-      .get(binding.captureToken)
-      ?.fail(new Error("audio:capture-cancelled"));
-    const request = {
-      requestId: crypto.randomUUID(),
-      action: "audio/captureCancel" as const,
-      binding,
-    };
-    const raw = await browser.runtime.sendMessage(request);
-    const response = AudioCaptureResponseSchema.parse(raw);
-    if (
-      !response.ok ||
-      response.action !== request.action ||
-      response.requestId !== request.requestId
-    ) {
-      throw new Error(`audio:capture-cancel:${response.reason ?? "failed"}`);
-    }
-  }
-
-  private waitForAudioCapture(
-    binding: AudioBindingKey,
-  ): Promise<AudioCaptureEvent> {
-    this.#audioWaiters
-      .get(binding.captureToken)
-      ?.fail(new Error("audio:capture-superseded"));
-    return new Promise<AudioCaptureEvent>((resolve, reject) => {
-      const listener = (raw: unknown) => {
-        const parsed = AudioCaptureEventSchema.safeParse(raw);
-        if (
-          !parsed.success ||
-          !sameAudioBinding(parsed.data.binding, binding)
-        ) {
-          return undefined;
-        }
-        cleanup();
-        resolve(parsed.data);
-        return undefined;
-      };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("audio:capture-timeout"));
-      }, this.#audioCaptureTimeoutMs);
-      const cleanup = () => {
-        clearTimeout(timer);
-        browser.runtime.onMessage.removeListener(listener);
-        if (this.#audioWaiters.get(binding.captureToken)?.fail === fail) {
-          this.#audioWaiters.delete(binding.captureToken);
-        }
-      };
-      const fail = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      this.#audioWaiters.set(binding.captureToken, { fail });
-      browser.runtime.onMessage.addListener(listener);
-    });
-  }
-
   private async send(request: RuntimeRequest): Promise<RuntimeResponse> {
     const parsed = RuntimeRequestSchema.parse(request);
     const raw = await browser.runtime.sendMessage(parsed);
@@ -263,21 +159,6 @@ export class RuntimeClient {
     if (!response.ok) throw new Error(`runtime:${response.reason}`);
     return response;
   }
-}
-
-function sameAudioBinding(
-  left: AudioBindingKey,
-  right: AudioBindingKey,
-): boolean {
-  return (
-    left.captureToken === right.captureToken &&
-    left.questionId === right.questionId &&
-    left.navigationEpoch === right.navigationEpoch
-  );
-}
-
-function asError(error: unknown, fallback: string): Error {
-  return error instanceof Error ? error : new Error(fallback);
 }
 
 function assertAction<A extends RuntimeAction>(

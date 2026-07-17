@@ -254,4 +254,39 @@ describe("PracticeController operation context", () => {
     expect(onSuccess).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it("retries only transient probe diagnostics during the startup grace window", async () => {
+    const { shouldRetryProbe } = await import("./practice-controller");
+
+    expect(
+      shouldRetryProbe({
+        code: "SITE_CHANGED",
+        detail: "question:position:missing",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetryProbe({
+        code: "AMBIGUOUS_CONTROL",
+        detail: "question:position:ambiguous",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetryProbe({
+        code: "AUTH_REQUIRED",
+        detail: "Firefly login required",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryProbe({
+        code: "INVALID_QUESTION",
+        detail: "question:prediction-edition-unverified",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryProbe({
+        code: "SITE_CHANGED",
+        detail: "question:prediction-total-changed",
+      }),
+    ).toBe(false);
+  });
 });

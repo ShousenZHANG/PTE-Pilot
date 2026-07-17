@@ -1,4 +1,5 @@
 import type { AttemptError } from "@pte-pilot/contracts";
+import type { ScoreSegment } from "../domain/types";
 
 export interface WordDiffResult {
   expectedTokens: string[];
@@ -6,6 +7,7 @@ export interface WordDiffResult {
   correctCount: number;
   accuracy: number;
   errors: AttemptError[];
+  segments: ScoreSegment[];
 }
 
 export function tokenizeWords(value: string): string[] {
@@ -133,11 +135,17 @@ export function diffWords(
   const actualTokens = tokenizeWords(actualText);
 
   if (sameMultiset(expectedTokens, actualTokens)) {
-    const errors = expectedTokens.flatMap<AttemptError>((expected, index) => {
+    const errors: AttemptError[] = [];
+    const segments: ScoreSegment[] = [];
+    expectedTokens.forEach((expected, index) => {
       const actual = actualTokens[index] ?? "";
-      return normalized(expected) === normalized(actual)
-        ? []
-        : [{ expected, actual, type: "order" }];
+      if (normalized(expected) === normalized(actual)) {
+        segments.push({ kind: "correct", text: expected });
+        return;
+      }
+      errors.push({ expected, actual, type: "order" });
+      segments.push({ kind: "omit", text: expected });
+      segments.push({ kind: "error", text: actual });
     });
     const correctCount = expectedTokens.length - errors.length;
     return {
@@ -150,11 +158,13 @@ export function diffWords(
         actualTokens.length,
       ),
       errors,
+      segments,
     };
   }
 
   const pairs = lcsPairs(expectedTokens, actualTokens);
   const errors: AttemptError[] = [];
+  const segments: ScoreSegment[] = [];
   let expectedCursor = 0;
   let actualCursor = 0;
   const boundaries: Array<readonly [number, number]> = [
@@ -170,14 +180,21 @@ export function diffWords(
       const actual = actualGap[index];
       if (expected !== undefined && actual !== undefined) {
         errors.push({ expected, actual, type: classify(expected, actual) });
+        segments.push({ kind: "omit", text: expected });
+        segments.push({ kind: "error", text: actual });
       }
     }
     for (const expected of expectedGap.slice(paired)) {
       errors.push({ expected, actual: "", type: "missing" });
+      segments.push({ kind: "omit", text: expected });
     }
     for (const actual of actualGap.slice(paired)) {
       errors.push({ expected: "", actual, type: "extra" });
+      segments.push({ kind: "error", text: actual });
     }
+    const matchedExpected = expectedTokens[expectedMatch];
+    if (matchedExpected !== undefined && expectedMatch < expectedTokens.length)
+      segments.push({ kind: "correct", text: matchedExpected });
     expectedCursor = expectedMatch + 1;
     actualCursor = actualMatch + 1;
   }
@@ -193,5 +210,6 @@ export function diffWords(
       actualTokens.length,
     ),
     errors,
+    segments,
   };
 }

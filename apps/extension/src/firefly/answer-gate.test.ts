@@ -35,16 +35,21 @@ function siteFixture(overrides: Partial<AnswerSitePort> = {}): AnswerSitePort {
     isScoreComplete: () => false,
     click: () => undefined,
     capabilities: () => ({ redo: true }),
-    readRevealedAnswer: () => "the library closes at nine this evening",
+    readRevealedContent: () => ({
+      answer: "the library closes at nine this evening",
+      translation: null,
+    }),
+    dismissRevealDialog: async () => true,
     input: () => ({ value: "" }) as HTMLTextAreaElement,
     ...overrides,
   };
 }
 
 describe("AnswerGate", () => {
-  it("scores atomically and never returns the full answer", async () => {
+  it("scores atomically and returns the review with the revealed sentence", async () => {
     const order: string[] = [];
     let revealed = false;
+    const dismissRevealDialog = vi.fn(async () => true);
     const site = siteFixture({
       writeAnswer: (value) => order.push(`write:${value}`),
       revealSignature: () => ({
@@ -58,10 +63,14 @@ describe("AnswerGate", () => {
         revealed = true;
         return revealProof(operationToken, "score");
       },
-      readRevealedAnswer: () => {
+      readRevealedContent: () => {
         order.push("read");
-        return "the library closes at nine this evening";
+        return {
+          answer: "the library closes at nine this evening",
+          translation: "图书馆今晚九点关门。",
+        };
       },
+      dismissRevealDialog,
     });
     const gate = new AnswerGate(site);
     gate.setNavigationEpoch(4);
@@ -82,10 +91,13 @@ describe("AnswerGate", () => {
         expect.objectContaining({ expected: "closes", actual: "close" }),
       ]),
     );
-    expect(result).not.toHaveProperty("correctAnswer");
-    expect(JSON.stringify(result)).not.toContain(
+    expect(result.review.answerText).toBe(
       "the library closes at nine this evening",
     );
+    expect(result.review.translation).toBe("图书馆今晚九点关门。");
+    expect(result.review.correctCount).toBe(6);
+    expect(result.review.totalWords).toBe(7);
+    expect(dismissRevealDialog).toHaveBeenCalledTimes(1);
   });
 
   it("uses a separately proven Answer action after score-only completion", async () => {
@@ -106,9 +118,9 @@ describe("AnswerGate", () => {
         revealed = true;
         return revealProof(operationToken, "answer");
       },
-      readRevealedAnswer: () => {
+      readRevealedContent: () => {
         order.push("read");
-        return "answer";
+        return { answer: "answer", translation: null };
       },
     });
 
@@ -153,9 +165,10 @@ describe("AnswerGate", () => {
 
   it("rejects a revealed answer proof that is not bound to this submission", async () => {
     let revealed = false;
-    const readRevealedAnswer = vi.fn(
-      () => "stale answer from another question",
-    );
+    const readRevealedContent = vi.fn(() => ({
+      answer: "stale answer from another question",
+      translation: null,
+    }));
     const site = siteFixture({
       revealSignature: () => ({
         visible: revealed,
@@ -173,18 +186,21 @@ describe("AnswerGate", () => {
           source: "score",
         };
       }) as unknown as AnswerSitePort["scoreAndWait"],
-      readRevealedAnswer,
+      readRevealedContent,
     });
 
     await expect(new AnswerGate(site).submit("draft")).rejects.toThrow(
       "submission:invalid-reveal-proof",
     );
-    expect(readRevealedAnswer).not.toHaveBeenCalled();
+    expect(readRevealedContent).not.toHaveBeenCalled();
   });
 
   it("rejects a visible answer when the score action returns no causal proof", async () => {
     let revealed = false;
-    const readRevealedAnswer = vi.fn(() => "unproven stale answer");
+    const readRevealedContent = vi.fn(() => ({
+      answer: "unproven stale answer",
+      translation: null,
+    }));
     const site = siteFixture({
       revealSignature: () => ({
         visible: revealed,
@@ -196,13 +212,13 @@ describe("AnswerGate", () => {
       }) as unknown as AnswerSitePort["scoreAndWait"],
       revealAnswerAndWait: (async () =>
         undefined) as unknown as AnswerSitePort["revealAnswerAndWait"],
-      readRevealedAnswer,
+      readRevealedContent,
     });
 
     await expect(new AnswerGate(site).submit("draft")).rejects.toThrow(
       "submission:invalid-reveal-proof",
     );
-    expect(readRevealedAnswer).not.toHaveBeenCalled();
+    expect(readRevealedContent).not.toHaveBeenCalled();
   });
 });
 

@@ -6,6 +6,30 @@ interface SavedIsolation {
 }
 
 export const PTE_PILOT_ISOLATION_ATTRIBUTE = "data-pte-pilot-isolated";
+export const PTE_PILOT_COCKPIT_OPEN_ATTRIBUTE = "data-pte-pilot-cockpit-open";
+
+const SUPPRESSION_STYLE_ID = "pte-pilot-site-overlay-suppression";
+
+/*
+ * While the cockpit covers the page, Firefly's AI score dialog must never
+ * paint above it. Forcing z-index keeps the dialog technically visible
+ * (display/opacity untouched), so the adapter can still read and prove the
+ * revealed answer while the user only ever sees the cockpit.
+ */
+const SUPPRESSION_CSS = `
+html[${PTE_PILOT_COCKPIT_OPEN_ATTRIBUTE}] .el-dialog__wrapper.ai-score,
+html[${PTE_PILOT_COCKPIT_OPEN_ATTRIBUTE}] .v-modal {
+  z-index: 0 !important;
+}
+`;
+
+function ensureSuppressionStyle(): void {
+  if (document.getElementById(SUPPRESSION_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = SUPPRESSION_STYLE_ID;
+  style.textContent = SUPPRESSION_CSS;
+  document.head.append(style);
+}
 
 export class PageIsolation {
   #saved: SavedIsolation[] = [];
@@ -17,6 +41,8 @@ export class PageIsolation {
   enable(cockpitNode: HTMLElement): void {
     if (this.#enabled) return;
     this.#enabled = true;
+    ensureSuppressionStyle();
+    document.documentElement.setAttribute(PTE_PILOT_COCKPIT_OPEN_ATTRIBUTE, "");
     this.#previousFocus =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -59,6 +85,7 @@ export class PageIsolation {
   disable(): void {
     if (!this.#enabled) return;
     this.#enabled = false;
+    document.documentElement.removeAttribute(PTE_PILOT_COCKPIT_OPEN_ATTRIBUTE);
     this.#observer?.disconnect();
     this.#observer = null;
     for (const saved of this.#saved) {

@@ -29,18 +29,6 @@ export const NavigationEpochSchema = z
   .brand<"NavigationEpoch">();
 export type NavigationEpoch = z.infer<typeof NavigationEpochSchema>;
 
-export const CaptureTokenSchema = z.string().uuid().brand<"CaptureToken">();
-export type CaptureToken = z.infer<typeof CaptureTokenSchema>;
-
-export const AudioBindingKeySchema = z
-  .object({
-    questionId: QuestionIdSchema,
-    navigationEpoch: NavigationEpochSchema,
-    captureToken: CaptureTokenSchema,
-  })
-  .strict();
-export type AudioBindingKey = z.infer<typeof AudioBindingKeySchema>;
-
 export const IndexedQuestionSchema = z
   .object({
     predictionEdition: PredictionEditionSchema,
