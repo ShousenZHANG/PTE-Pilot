@@ -72,15 +72,12 @@ const INITIAL_STATE: CockpitViewState = {
   fault: null,
 };
 
-const WAVE_BARS = Array.from({ length: 24 }, (_, index) => `wave-${index + 1}`);
-
 export function Cockpit(): React.JSX.Element | null {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const answerShellRef = useRef<HTMLLabelElement>(null);
-  const impactFlipRef = useRef(false);
   const reviewRef = useRef<HTMLElement>(null);
   const commandRef = useRef<HTMLElement>(null);
   const phaseStatusRef = useRef<HTMLSpanElement>(null);
+  const timerRef = useRef<HTMLSpanElement>(null);
   const wordCountRef = useRef<HTMLOutputElement>(null);
   const rootRef = useRef<HTMLElement>(null);
   const controllerRef = useRef<PracticeController | null>(null);
@@ -301,6 +298,23 @@ export function Cockpit(): React.JSX.Element | null {
     }
   }, [open]);
 
+  const timerIdentityKey = state.identity
+    ? `${state.identity.predictionEdition}:${state.identity.questionId}`
+    : "";
+  useEffect(() => {
+    if (timerRef.current) timerRef.current.textContent = "00:00";
+    if (!timerIdentityKey) return;
+    const startedAt = performance.now();
+    const interval = setInterval(() => {
+      const element = timerRef.current;
+      if (!element) return;
+      const seconds = Math.floor((performance.now() - startedAt) / 1000);
+      const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+      element.textContent = `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+    }, 1_000);
+    return () => clearInterval(interval);
+  }, [timerIdentityKey]);
+
   useEffect(() => {
     if (!open) return;
     if (state.phase === "ANSWERING")
@@ -431,66 +445,58 @@ export function Cockpit(): React.JSX.Element | null {
       data-phase={state.phase}
       aria-label="PTE Pilot WFD 练习舱"
     >
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand__mark" aria-hidden="true">
-            P
-          </span>
-          <span>PTE Pilot</span>
+      <header className="exam-header">
+        <div className="exam-header__title">
+          <strong>PTE Academic</strong>
+          <span>Listening · Write From Dictation</span>
         </div>
-        <dl className="question-meta">
-          <div>
-            <dt>模式</dt>
-            <dd data-testid="practice-mode">
-              {state.mode === "practice" ? "Practice" : "Exam"}
-            </dd>
-          </div>
-          <div>
-            <dt>题号</dt>
-            <dd data-testid="question-id">{identity?.questionId ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>进度</dt>
-            <dd data-testid="question-position">
-              {identity ? `${identity.position}/${identity.total}` : "—"}
-            </dd>
-          </div>
-        </dl>
-        <button
-          className="quiet-button"
-          type="button"
-          onClick={() => toggleOpen(false)}
-          aria-label="返回萤火虫原网页"
-        >
-          <kbd>Alt Shift P</kbd> 关闭
-        </button>
+        <div className="exam-header__meta">
+          <span className="exam-timer" role="timer" aria-label="本题用时">
+            <i aria-hidden="true" />
+            <span ref={timerRef}>00:00</span>
+          </span>
+          <span className="exam-counter" data-testid="question-position">
+            {identity ? `${identity.position}/${identity.total}` : "—"}
+          </span>
+          <span className="exam-qid" data-testid="question-id">
+            {identity ? `#${identity.questionId}` : ""}
+          </span>
+          <button
+            className="quiet-button"
+            type="button"
+            onClick={() => toggleOpen(false)}
+            aria-label="返回萤火虫原网页"
+          >
+            <kbd>Alt Shift P</kbd> 关闭
+          </button>
+        </div>
       </header>
 
       <section
         className={`practice-deck${state.review ? " practice-deck--review" : ""}`}
       >
-        <div className="audio-ribbon">
-          <div
-            className={`wave wave--${state.audioStatus.toLocaleLowerCase("en-AU")}`}
-            aria-hidden="true"
-          >
-            {WAVE_BARS.map((bar) => (
-              <i key={bar} />
-            ))}
-          </div>
-          <div>
-            <span className="eyebrow">萤火虫原音频</span>
+        <p className="instructions">
+          You will hear a sentence. Type the sentence in the box below exactly
+          as you hear it. Write as much of the sentence as you can. You will
+          hear the sentence only once.
+        </p>
+
+        <div className="audio-box" data-audio={state.audioStatus}>
+          <div className="audio-box__row">
             <strong data-testid="audio-status">
               {audioLabel(state.audioStatus, state.mode)}
             </strong>
+            <span className="key-hints" aria-hidden="true">
+              <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd> 播放 / 暂停
+              <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd> 重播
+            </span>
           </div>
-          <div className="key-hints" aria-hidden="true">
-            <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd> 播放 / 暂停
-            <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd> 重播
+          <div className="audio-track" aria-hidden="true">
+            <i className="audio-fill" />
           </div>
         </div>
 
-        <label className="answer-shell" ref={answerShellRef}>
+        <label className="answer-shell">
           <span className="sr-only">输入听到的完整句子</span>
           <textarea
             ref={textareaRef}
@@ -504,18 +510,12 @@ export function Cockpit(): React.JSX.Element | null {
             autoCorrect="off"
             placeholder={
               state.mode === "exam"
-                ? "Type exactly what you hear."
+                ? ""
                 : "听完即写。Enter 提交，Esc 打开命令层。"
             }
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
-              impactFlipRef.current = !impactFlipRef.current;
-              if (answerShellRef.current) {
-                answerShellRef.current.dataset.impact = impactFlipRef.current
-                  ? "a"
-                  : "b";
-              }
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
               saveTimerRef.current = setTimeout(
                 () => void controllerRef.current?.flushDraft(),
@@ -524,8 +524,8 @@ export function Cockpit(): React.JSX.Element | null {
             }}
             onBlur={() => void controllerRef.current?.flushDraft()}
           />
-          <span className="answer-footer">
-            <output ref={wordCountRef}>0 words</output>
+          <span className="answer-foot">
+            <output ref={wordCountRef}>Total Word Count: 0</output>
             <span>
               <kbd>Enter</kbd> 提交
             </span>
@@ -564,26 +564,51 @@ export function Cockpit(): React.JSX.Element | null {
         )}
       </section>
 
-      <footer className="statusbar">
-        <span
-          ref={phaseStatusRef}
-          data-testid="practice-state"
-          role="status"
-          aria-live="polite"
-          tabIndex={
-            isTransitionFocusState(state.phase, state.indexStatus) ? 0 : -1
-          }
-        >
-          <i />
-          {state.phase}
-        </span>
-        <span data-testid="site-status">{state.siteStatus}</span>
-        {state.indexStatus !== "IDLE" && (
-          <span data-testid="index-status">索引 {state.indexStatus}</span>
-        )}
-        <span data-testid="practice-notice" aria-live="polite">
-          {state.notice}
-        </span>
+      <footer className="exam-footer">
+        <div className="status-cluster">
+          <span
+            ref={phaseStatusRef}
+            data-testid="practice-state"
+            role="status"
+            aria-live="polite"
+            tabIndex={
+              isTransitionFocusState(state.phase, state.indexStatus) ? 0 : -1
+            }
+          >
+            <i />
+            {state.phase}
+          </span>
+          <span data-testid="site-status">{state.siteStatus}</span>
+          {state.indexStatus !== "IDLE" && (
+            <span data-testid="index-status">索引 {state.indexStatus}</span>
+          )}
+          <span data-testid="practice-notice" aria-live="polite">
+            {state.notice}
+          </span>
+        </div>
+        <div className="exam-footer__actions">
+          <span
+            className={`mode-chip mode-chip--${state.mode}`}
+            data-testid="practice-mode"
+          >
+            {state.mode === "practice" ? "Practice" : "Exam"}
+          </span>
+          <button
+            type="button"
+            className="btn-next"
+            disabled={state.phase !== "ANSWERING" && state.phase !== "REVIEW"}
+            onClick={() => {
+              const controller = controllerRef.current;
+              if (!controller) return;
+              if (controller.state.phase === "ANSWERING")
+                void controller.submit();
+              else if (controller.state.phase === "REVIEW")
+                void controller.navigate("next");
+            }}
+          >
+            Next
+          </button>
+        </div>
       </footer>
 
       {(state.indexStatus === "INDEXING" || state.indexStatus === "PAUSED") && (
@@ -976,11 +1001,9 @@ function updateWordCount(
   const count = textarea.value.trim()
     ? textarea.value.trim().split(/\s+/u).length
     : 0;
-  output.value = `${count} words`;
+  output.value = `Total Word Count: ${count}`;
 }
 
 function audioLabel(status: string, mode: PracticeMode): string {
-  if (mode === "exam")
-    return status === "PLAYING" ? "播放中 · 单次" : `考试单次播放 · ${status}`;
-  return status;
+  return mode === "exam" ? `Status: ${status} · 单次播放` : `Status: ${status}`;
 }

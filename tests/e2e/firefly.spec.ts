@@ -33,9 +33,8 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await answer.pressSequentially(
     "Students should submit their assignments by Friday",
   );
-  await expect(page.locator(".answer-shell")).toHaveAttribute(
-    "data-impact",
-    /[ab]/u,
+  await expect(page.locator(".answer-foot output")).toHaveText(
+    "Total Word Count: 7",
   );
   await page.keyboard.press("Alt+KeyP");
   await expect
