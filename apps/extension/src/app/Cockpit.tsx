@@ -16,7 +16,9 @@ import {
 import { PageIsolation, trapTab } from "./page-isolation";
 import {
   type CockpitViewState,
+  canPersistPredictionEdition,
   PracticeController,
+  type RankedReviewEntry,
 } from "./practice-controller";
 
 type Panel = "none" | "words" | "settings" | "help" | "ranked";
@@ -73,7 +75,7 @@ const INITIAL_STATE: CockpitViewState = {
   notice: "",
   marked: false,
   words: [],
-  rankedQuestionIds: [],
+  rankedEntries: [],
   keymap: { ...DEFAULT_ALT_KEYMAP },
   fault: null,
 };
@@ -111,6 +113,7 @@ export function Cockpit(): React.JSX.Element | null {
   const [panel, setPanelState] = useState<Panel>("none");
   const [commandBusy, setCommandBusy] = useState(false);
   const [autoPlayIn, setAutoPlayIn] = useState<number | null>(null);
+  const [onboardDismissed, setOnboardDismissed] = useState(false);
   const countdownQuestionRef = useRef("");
   const [state, setState] = useState<CockpitViewState>(INITIAL_STATE);
 
@@ -564,6 +567,38 @@ export function Cockpit(): React.JSX.Element | null {
           hear the sentence only once.
         </p>
 
+        {identity &&
+          !canPersistPredictionEdition(identity.predictionEdition) &&
+          !onboardDismissed &&
+          isActionablePhase(state.phase) && (
+            <aside className="onboard" data-testid="onboarding">
+              <div className="onboard__text">
+                <strong>第一步：建立索引</strong>
+                <span>
+                  建立后自动记录错题与错词，解锁本地复习、间隔重复和打字训练。
+                  当前页共 {identity.total} 题
+                  {identity.total > 300
+                    ? "——题量较大，建议先在萤火虫切到周预测页再建。"
+                    : "，一次建好长期使用。"}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="onboard__go"
+                onClick={() => void controllerRef.current?.buildFullIndex()}
+              >
+                一键建立索引
+              </button>
+              <button
+                type="button"
+                className="onboard__later"
+                onClick={() => setOnboardDismissed(true)}
+              >
+                稍后
+              </button>
+            </aside>
+          )}
+
         <div
           className="audio-box"
           data-audio={state.audioStatus}
@@ -960,7 +995,7 @@ function CommandLayer({
         )}
         {panel === "ranked" && (
           <RankedReview
-            questionIds={state.rankedQuestionIds}
+            entries={state.rankedEntries}
             current={state.identity?.questionId}
             onChoose={onChoose}
           />
@@ -1138,34 +1173,86 @@ function enumerateChars(word: string): Array<{ char: string; id: string }> {
   });
 }
 
+type ReviewFilter = "all" | "wrong" | "new" | "due";
+
+const REVIEW_FILTERS: Array<{ id: ReviewFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "wrong", label: "只看错题" },
+  { id: "due", label: "到期" },
+  { id: "new", label: "未做" },
+];
+
+function matchesReviewFilter(
+  entry: RankedReviewEntry,
+  filter: ReviewFilter,
+): boolean {
+  if (filter === "wrong") return entry.wrong;
+  if (filter === "due") return entry.due;
+  if (filter === "new") return !entry.attempted;
+  return true;
+}
+
 function RankedReview({
-  questionIds,
+  entries,
   current,
   onChoose,
 }: {
-  questionIds: string[];
+  entries: RankedReviewEntry[];
   current: string | undefined;
   onChoose: (questionId: string) => void;
 }): React.JSX.Element {
+  const [filter, setFilter] = useState<ReviewFilter>("all");
+  const attempted = entries.filter((entry) => entry.attempted).length;
+  const wrong = entries.filter((entry) => entry.wrong).length;
+  const due = entries.filter((entry) => entry.due).length;
+  const visible = entries.filter((entry) => matchesReviewFilter(entry, filter));
   return (
     <section data-testid="ranked-review">
       <h2>本地复习</h2>
-      <p>根据本机错题、准确率和练习时间排列。</p>
-      <ol className="rank-list">
-        {questionIds.slice(0, 30).map((questionId, index) => (
-          <li key={questionId}>
-            <button
-              type="button"
-              disabled={questionId === current}
-              onClick={() => onChoose(questionId)}
-            >
-              <span>#{index + 1}</span>
-              {questionId}
-              {questionId === current ? " · 当前" : ""}
-            </button>
-          </li>
+      <p className="review-stats" data-testid="review-stats">
+        已练 {attempted}/{entries.length} · 错题 {wrong} · 到期 {due}
+      </p>
+      <div className="review-filters" role="group" aria-label="复习筛选">
+        {REVIEW_FILTERS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            className={`chip${filter === id ? " chip--on" : ""}`}
+            aria-pressed={filter === id}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+            {id === "wrong" ? `（${wrong}）` : ""}
+          </button>
         ))}
-      </ol>
+      </div>
+      {visible.length === 0 ? (
+        <p className="review-empty">
+          {filter === "wrong" ? "没有错题——继续保持。" : "该筛选下暂无题目。"}
+        </p>
+      ) : (
+        <ol className="rank-list">
+          {visible.slice(0, 50).map((entry, index) => (
+            <li key={entry.questionId}>
+              <button
+                type="button"
+                disabled={entry.questionId === current}
+                onClick={() => onChoose(entry.questionId)}
+              >
+                <span>#{index + 1}</span>
+                {entry.questionId}
+                {entry.wrong ? <em className="tag tag--wrong">错题</em> : null}
+                {!entry.attempted ? <em className="tag">未做</em> : null}
+                {entry.due && !entry.wrong ? (
+                  <em className="tag tag--due">到期</em>
+                ) : null}
+                {entry.marked ? <em className="tag tag--marked">★</em> : null}
+                {entry.questionId === current ? " · 当前" : ""}
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

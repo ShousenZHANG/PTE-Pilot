@@ -59,12 +59,23 @@ export class AudioBroker extends EventTarget {
   }
 
   /*
-   * Ask the browser to buffer the whole clip as soon as the question is
-   * bound, so the first Alt+P does not wait on the network.
+   * Buffer the whole clip as soon as the question is bound so the first
+   * play does not wait on the network. Merely flipping preload is not
+   * enough once the element exists, so a load() is forced while nothing
+   * has been fetched yet.
    */
   private warmUp(): void {
     const element = this.adoptElement();
-    if (element && element.preload !== "auto") element.preload = "auto";
+    if (!element) return;
+    if (element.preload !== "auto") element.preload = "auto";
+    const untouched = element.readyState === 0;
+    if (untouched && (element.currentSrc || element.src)) {
+      try {
+        element.load();
+      } catch {
+        // The site owns the element; playback still works without the warm-up.
+      }
+    }
   }
 
   setMode(mode: PracticeMode): void {

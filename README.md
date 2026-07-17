@@ -1,5 +1,26 @@
 # PTE Pilot
 
+Local-first, keyboard-first Chrome MV3 extension that rebuilds the Firefly
+PTE **Write From Dictation** practice experience: an exam-replica cockpit,
+zero-latency typing with per-character effects, in-cockpit AI scoring with a
+word-level diff, spaced-repetition review, and a typing drill built from your
+frequently missed words.
+
+The Firefly site keeps providing login, questions, original audio, scoring
+and navigation. PTE Pilot never exports the question bank, never stores full
+answer sentences, and never bypasses any entitlement. Manifest permissions:
+`storage` plus `https://www.fireflyau.com/*` — nothing else.
+
+**Quick start:** unzip `PTE-Pilot-Chrome-latest.zip` → `chrome://extensions`
+→ enable Developer mode → *Load unpacked* → open the Firefly WFD exercise
+page and log in → press `Alt+Shift+P`.
+
+**Build from source:** Node `>=24.14 <25`, pnpm `>=11.7 <12`, then
+`pnpm install --frozen-lockfile && pnpm build`. Full gate: `pnpm verify`
+(lint, typecheck, unit, build, e2e — same as CI). License: [MIT](./LICENSE).
+
+---
+
 纯本地、键盘优先的 Chrome MV3 萤火虫 WFD 练习扩展。
 
 萤火虫继续提供登录状态、题目、原始音频、评分、答案揭示和切题。PTE Pilot 只重做练习界面：专注输入、键盘导航、词级差异、草稿、错词与本地复习。无需账号绑定、API key 或额外本机服务。

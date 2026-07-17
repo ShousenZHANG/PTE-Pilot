@@ -31,6 +31,8 @@ class FakeAudioElement extends EventTarget {
     this.dispatchEvent(new Event("pause"));
   }
 
+  load(): void {}
+
   finish(): void {
     this.paused = true;
     this.ended = true;

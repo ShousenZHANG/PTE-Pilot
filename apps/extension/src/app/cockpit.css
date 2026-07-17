@@ -221,6 +221,58 @@ kbd {
   line-height: 1.55;
 }
 
+/* ---------- onboarding ---------- */
+
+.onboard {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid #ecd9ab;
+  border-left: 3px solid var(--exam);
+  border-radius: 4px;
+  padding: 12px 16px;
+  background: #fdf8ec;
+  animation: card-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.onboard__text {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.onboard__text strong {
+  font-size: 14.5px;
+}
+
+.onboard__text span {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.onboard__go {
+  flex: 0 0 auto;
+  border-color: var(--exam);
+  color: #fff;
+  background: var(--exam);
+  font-weight: 700;
+}
+
+.onboard__go:hover:not(:disabled),
+.onboard__go:focus-visible {
+  color: #fff;
+  background: #9a6519;
+}
+
+.onboard__later {
+  flex: 0 0 auto;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+
 /* ---------- exam audio player ---------- */
 
 .audio-box {
@@ -898,10 +950,45 @@ kbd {
   margin-top: 8px;
 }
 
+.review-stats {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.chip {
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+}
+
+.chip--on {
+  border-color: var(--blue);
+  color: #fff;
+  background: var(--blue);
+}
+
+.chip--on:hover:not(:disabled),
+.chip--on:focus-visible {
+  color: #fff;
+  background: #285f95;
+}
+
+.review-empty {
+  color: var(--muted);
+}
+
 .rank-list button {
   display: flex;
   width: min(560px, 100%);
-  gap: 14px;
+  align-items: center;
+  gap: 12px;
   text-align: left;
 }
 
@@ -909,6 +996,31 @@ kbd {
   width: 42px;
   color: var(--blue);
   font-weight: 700;
+}
+
+.tag {
+  border-radius: 3px;
+  padding: 1px 7px;
+  background: var(--line-soft);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.tag--wrong {
+  background: #fdf0ef;
+  color: var(--danger);
+}
+
+.tag--due {
+  background: #fdf8ec;
+  color: var(--exam);
+}
+
+.tag--marked {
+  background: transparent;
+  color: var(--exam);
 }
 
 .settings-grid {

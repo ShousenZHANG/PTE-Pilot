@@ -36,6 +36,14 @@ import { rankLocally } from "../learning/ranking";
 import { RuntimeClient } from "../runtime/runtime-client";
 import { DEFAULT_ALT_KEYMAP, isValidKeymap } from "./keyboard";
 
+export interface RankedReviewEntry {
+  questionId: string;
+  attempted: boolean;
+  wrong: boolean;
+  due: boolean;
+  marked: boolean;
+}
+
 export interface CockpitViewState {
   phase: PracticePhase;
   mode: PracticeMode;
@@ -48,7 +56,7 @@ export interface CockpitViewState {
   notice: string;
   marked: boolean;
   words: WordStatSummary[];
-  rankedQuestionIds: string[];
+  rankedEntries: RankedReviewEntry[];
   keymap: Record<string, string>;
   fault: RuntimeFault | null;
 }
@@ -182,7 +190,7 @@ export class PracticeController extends EventTarget {
     notice: "",
     marked: false,
     words: [],
-    rankedQuestionIds: [],
+    rankedEntries: [],
     keymap: { ...DEFAULT_ALT_KEYMAP },
     fault: null,
   };
@@ -868,8 +876,24 @@ export class PracticeController extends EventTarget {
         (question) => question.questionId,
       );
       if (currentIds.join("\u0000") !== allIds.join("\u0000")) return false;
+      const candidatesById = new Map(
+        allCandidates.map((candidate) => [candidate.questionId, candidate]),
+      );
+      const rankedEntries: RankedReviewEntry[] = localOrder.map(
+        (questionId) => {
+          const candidate = candidatesById.get(questionId);
+          const attempted = (candidate?.attemptCount ?? 0) > 0;
+          return {
+            questionId,
+            attempted,
+            wrong: attempted && (candidate?.weaknessScore ?? 0) > 0,
+            due: attempted && (candidate?.dueScore ?? 0) >= 0.5,
+            marked: candidate?.marked ?? false,
+          };
+        },
+      );
       this.patch({
-        rankedQuestionIds: localOrder,
+        rankedEntries,
         notice:
           indexSnapshot.completeness === "complete"
             ? "本地复习顺序已生成"
@@ -1045,7 +1069,12 @@ export class PracticeController extends EventTarget {
     const identity = this.#state.identity;
     if (
       !identity ||
-      this.#state.phase !== "COMMAND" ||
+      // Reachable from the onboarding banner as well as the command layer.
+      !(
+        this.#state.phase === "ANSWERING" ||
+        this.#state.phase === "REVIEW" ||
+        this.#state.phase === "COMMAND"
+      ) ||
       canPersistPredictionEdition(identity.predictionEdition)
     )
       return;
