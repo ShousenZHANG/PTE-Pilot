@@ -684,7 +684,12 @@ export class PracticeController extends EventTarget {
     } catch (error) {
       if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
         return;
-      this.patch({ audioStatus: "AUDIO_ERROR", notice: safeError(error) });
+      const message = safeError(error);
+      if (message === "audio:needs-gesture") {
+        this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
+        return;
+      }
+      this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
     } finally {
       this.#audioCommandPending = false;
     }
@@ -710,7 +715,12 @@ export class PracticeController extends EventTarget {
     } catch (error) {
       if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
         return;
-      this.patch({ audioStatus: "AUDIO_ERROR", notice: safeError(error) });
+      const message = safeError(error);
+      if (message === "audio:needs-gesture") {
+        this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
+        return;
+      }
+      this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
     } finally {
       this.#audioCommandPending = false;
     }

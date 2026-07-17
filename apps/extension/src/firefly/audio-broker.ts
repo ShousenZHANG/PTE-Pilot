@@ -13,6 +13,8 @@ export interface AudioSnapshot {
   playing: boolean;
 }
 
+const HAVE_FUTURE_DATA = 3;
+
 export class AudioBrokerError extends Error {
   readonly code = "AUDIO_ERROR" as const;
 
@@ -53,6 +55,16 @@ export class AudioBroker extends EventTarget {
     this.#binding = { questionId, navigationEpoch };
     this.#examStartConsumed = false;
     this.setState("EMPTY");
+    this.warmUp();
+  }
+
+  /*
+   * Ask the browser to buffer the whole clip as soon as the question is
+   * bound, so the first Alt+P does not wait on the network.
+   */
+  private warmUp(): void {
+    const element = this.adoptElement();
+    if (element && element.preload !== "auto") element.preload = "auto";
   }
 
   setMode(mode: PracticeMode): void {
@@ -81,6 +93,7 @@ export class AudioBroker extends EventTarget {
           return;
         }
         this.assertExamPlayAvailable();
+        if (element.readyState < HAVE_FUTURE_DATA) this.setState("BUFFERING");
         await element.play();
         this.assertCurrent(binding);
         if (this.#mode === "exam") this.#examStartConsumed = true;
@@ -98,6 +111,7 @@ export class AudioBroker extends EventTarget {
       if (this.#mode === "exam") this.#examStartConsumed = true;
       this.setState("PLAYING");
     } catch (error) {
+      if (this.handleBenignPlaybackError(binding, error)) return;
       this.failClosed(binding);
       throw toAudioError(error);
     }
@@ -113,7 +127,10 @@ export class AudioBroker extends EventTarget {
       const element = this.adoptElement();
       if (element) {
         element.currentTime = 0;
-        if (element.paused || element.ended) await element.play();
+        if (element.paused || element.ended) {
+          if (element.readyState < HAVE_FUTURE_DATA) this.setState("BUFFERING");
+          await element.play();
+        }
         this.assertCurrent(binding);
         if (this.#mode === "exam") this.#examStartConsumed = true;
         this.setState("PLAYING");
@@ -124,9 +141,36 @@ export class AudioBroker extends EventTarget {
       if (this.#mode === "exam") this.#examStartConsumed = true;
       this.setState("PLAYING");
     } catch (error) {
+      if (this.handleBenignPlaybackError(binding, error)) return;
       this.failClosed(binding);
       throw toAudioError(error);
     }
+  }
+
+  /*
+   * Two failure shapes are routine, not faults: the browser refusing
+   * autoplay before a user gesture, and play() being interrupted by a
+   * pause() during rapid keystrokes or a question switch. Neither may
+   * surface as AUDIO_ERROR.
+   */
+  private handleBenignPlaybackError(
+    binding: { questionId: string; navigationEpoch: number },
+    error: unknown,
+  ): boolean {
+    if (!(error instanceof DOMException) || this.#binding !== binding)
+      return false;
+    if (error.name === "NotAllowedError") {
+      this.setState("READY");
+      throw new AudioBrokerError("audio:needs-gesture", { cause: error });
+    }
+    if (error.name === "AbortError") {
+      const element = this.#element;
+      if (element && !element.paused && !element.ended)
+        this.setState("PLAYING");
+      else if (this.#state === "BUFFERING") this.setState("PAUSED");
+      return true;
+    }
+    return false;
   }
 
   pause(): void {
@@ -163,7 +207,9 @@ export class AudioBroker extends EventTarget {
       elements.length === 1
         ? elements
         : elements.filter((element) => element.currentSrc || element.src);
-    const element = candidates.length === 1 ? (candidates[0] ?? null) : null;
+    // Voice switching can leave several sourced elements behind; the newest
+    // one in DOM order is the active player. bind() already stopped the rest.
+    const element = candidates.length > 0 ? (candidates.at(-1) ?? null) : null;
     if (element === this.#element) return element;
     this.releaseElement();
     if (!element) return null;
@@ -179,14 +225,24 @@ export class AudioBroker extends EventTarget {
     const onPlay = () => {
       if (isCurrent()) this.setState("PLAYING");
     };
+    const onWaiting = () => {
+      if (isCurrent() && this.#state === "PLAYING") this.setState("BUFFERING");
+    };
+    const onPlaying = () => {
+      if (isCurrent()) this.setState("PLAYING");
+    };
     element.addEventListener("ended", onEnded);
     element.addEventListener("pause", onPause);
     element.addEventListener("play", onPlay);
+    element.addEventListener("waiting", onWaiting);
+    element.addEventListener("playing", onPlaying);
     this.#element = element;
     this.#detachElement = () => {
       element.removeEventListener("ended", onEnded);
       element.removeEventListener("pause", onPause);
       element.removeEventListener("play", onPlay);
+      element.removeEventListener("waiting", onWaiting);
+      element.removeEventListener("playing", onPlaying);
     };
     return element;
   }

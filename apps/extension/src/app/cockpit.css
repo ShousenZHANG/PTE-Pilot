@@ -157,6 +157,10 @@ button {
   padding: 8px 14px;
   cursor: pointer;
   background: var(--surface);
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 button:hover:not(:disabled),
@@ -222,7 +226,7 @@ kbd {
 .audio-box {
   display: grid;
   gap: 10px;
-  width: min(500px, 100%);
+  width: min(560px, 100%);
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 13px 16px 15px;
@@ -248,6 +252,10 @@ kbd {
   color: var(--danger);
 }
 
+.audio-box[data-audio="BUFFERING"] strong {
+  color: var(--exam);
+}
+
 .key-hints {
   color: var(--muted);
   font-size: 11.5px;
@@ -268,6 +276,16 @@ kbd {
   overflow: hidden;
   border-radius: 3px;
   background: #d5dae0;
+}
+
+.audio-box[data-audio="BUFFERING"] .audio-track {
+  animation: buffer-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes buffer-pulse {
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .audio-fill {
@@ -321,57 +339,63 @@ kbd {
   box-shadow: 0 0 0 3px var(--blue-soft);
 }
 
-/*
- * Keystroke feedback, compositor-only: the rail animates transform and
- * opacity on its own pseudo-element layer, so typing latency stays at zero.
- */
-.answer-shell::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 2;
-  height: 2px;
-  content: "";
-  pointer-events: none;
-  background: linear-gradient(90deg, transparent, var(--blue), transparent);
-  opacity: 0;
-  transform: scaleX(0.1);
-  transform-origin: center;
-  will-change: transform, opacity;
-}
-
 .answer-shell {
   position: relative;
 }
 
-.answer-shell[data-impact="a"]::after {
-  animation: impact-rail-a 140ms ease-out;
+/*
+ * Per-character typing effect. The mirror is an invisible metric twin of
+ * the textarea used only to locate the caret; sparks replay a
+ * transform/opacity-only animation, so typing latency stays at zero.
+ */
+.type-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  padding: 15px 18px;
+  font-size: 17px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
-.answer-shell[data-impact="b"]::after {
-  animation: impact-rail-b 140ms ease-out;
+.type-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
 }
 
-@keyframes impact-rail-a {
-  30% {
-    opacity: 0.85;
-    transform: scaleX(0.45);
+/*
+ * Transform/opacity only — no blur or shadow animation, so the whole
+ * effect composites on the GPU and never repaints during typing.
+ */
+.type-spark {
+  position: absolute;
+  color: var(--blue);
+  opacity: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.7;
+  text-shadow: 0 0 10px rgba(47, 111, 173, 0.55);
+  will-change: transform, opacity;
+}
+
+.type-spark--run {
+  animation: char-land 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes char-land {
+  0% {
+    opacity: 0.9;
+    transform: translateY(-5px) scale(1.5);
   }
   100% {
     opacity: 0;
-    transform: scaleX(0.95);
-  }
-}
-
-@keyframes impact-rail-b {
-  30% {
-    opacity: 0.85;
-    transform: scaleX(0.45);
-  }
-  100% {
-    opacity: 0;
-    transform: scaleX(0.95);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -400,7 +424,7 @@ kbd {
 }
 
 /* Exam realism: no typing effects in exam mode. */
-.cockpit--exam .answer-shell::after {
+.cockpit--exam .type-fx {
   display: none;
 }
 
@@ -457,6 +481,14 @@ kbd {
   border-radius: 4px;
   padding: 15px 20px 13px;
   background: var(--surface);
+  animation: card-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
 .review__head {
@@ -586,6 +618,37 @@ kbd {
   color: var(--notice);
 }
 
+.footer-menu {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.fbtn {
+  border-color: rgba(255, 255, 255, 0.22);
+  padding: 6px 10px;
+  color: var(--bar-muted);
+  background: transparent;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fbtn:hover:not(:disabled),
+.fbtn:focus-visible {
+  border-color: rgba(255, 255, 255, 0.55);
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fbtn kbd {
+  margin: 0 0 0 4px;
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 10px;
+}
+
 .exam-footer__actions {
   display: flex;
   flex: 0 0 auto;
@@ -688,6 +751,15 @@ kbd {
   border-radius: 4px;
   background: var(--surface);
   box-shadow: 0 18px 56px rgba(24, 34, 46, 0.26);
+  animation: layer-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top center;
+}
+
+@keyframes layer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
 }
 
 .command-menu {
@@ -735,6 +807,95 @@ kbd {
 
 [data-testid="word-library"] li span {
   color: var(--muted);
+}
+
+.drill-hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.word-pick label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.word-pick input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  accent-color: var(--blue);
+}
+
+.word-pick span {
+  margin-left: auto;
+}
+
+.drill-start {
+  margin-top: 14px;
+  border-color: var(--blue);
+  color: #fff;
+  background: var(--blue);
+  font-weight: 700;
+}
+
+.drill-start:hover:not(:disabled),
+.drill-start:focus-visible {
+  color: #fff;
+  background: #285f95;
+}
+
+.drill-meta {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.drill-word {
+  margin: 0 0 22px;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.drill-word--shake {
+  animation: drill-shake 180ms ease-out;
+}
+
+@keyframes drill-shake {
+  25% {
+    transform: translateX(-4px);
+  }
+  60% {
+    transform: translateX(3px);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.drill-char {
+  color: #b6bfc9;
+  transition: color 0.08s linear;
+}
+
+.drill-char--hit {
+  color: var(--ok);
+}
+
+.drill-input {
+  width: 280px;
+  padding: 10px 14px;
+  font-size: 20px;
+  letter-spacing: 0.08em;
+}
+
+.drill-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .rank-list button {
@@ -831,6 +992,10 @@ input {
 
   .status-cluster span:nth-child(2),
   .status-cluster span:nth-child(3) {
+    display: none;
+  }
+
+  .footer-menu {
     display: none;
   }
 

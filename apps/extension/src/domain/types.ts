@@ -15,6 +15,7 @@ export type PracticePhase =
 export type AudioState =
   | "EMPTY"
   | "READY"
+  | "BUFFERING"
   | "PLAYING"
   | "PAUSED"
   | "ENDED"

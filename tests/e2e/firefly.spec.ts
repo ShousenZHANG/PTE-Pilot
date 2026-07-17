@@ -22,20 +22,7 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   const cockpit = page.getByTestId("pte-pilot-root");
   await expect(cockpit).toBeVisible();
   await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
-  await expect(page.getByTestId("question-position")).toHaveText("1/3");
-  await expect(page.getByTestId("index-status")).toContainText("COMPLETE");
-  await expect(page.locator("#site-shell")).toHaveAttribute(
-    "data-pte-pilot-isolated",
-    "aria-added",
-  );
-
-  const answer = page.getByTestId("answer-input");
-  await answer.pressSequentially(
-    "Students should submit their assignments by Friday",
-  );
-  await expect(page.locator(".answer-foot output")).toHaveText(
-    "Total Word Count: 7",
-  );
+  await expect(page.getByTestId("audio-status")).toContainText("Beginning in");
   await page.keyboard.press("Alt+KeyP");
   await expect(page.getByTestId("audio-status")).toContainText("PLAYING");
   await expect
@@ -46,6 +33,13 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
     )
     .toBe(true);
 
+  await expect(page.getByTestId("question-position")).toHaveText("1/3");
+  await expect(page.getByTestId("index-status")).toContainText("COMPLETE");
+  await expect(page.locator("#site-shell")).toHaveAttribute(
+    "data-pte-pilot-isolated",
+    "aria-added",
+  );
+
   await page.keyboard.press("Alt+KeyR");
   await expect(page.getByTestId("audio-status")).toContainText("PLAYING");
   await expect
@@ -55,6 +49,14 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
         .evaluate((element) => (element as HTMLAudioElement).currentTime < 1.5),
     )
     .toBe(true);
+
+  const answer = page.getByTestId("answer-input");
+  await answer.pressSequentially(
+    "Students should submit their assignments by Friday",
+  );
+  await expect(page.locator(".answer-foot output")).toHaveText(
+    "Total Word Count: 7",
+  );
 
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
@@ -86,6 +88,16 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await expect(page.getByTestId("command-layer")).toBeVisible();
   await page.keyboard.press("KeyW");
   await expect(page.getByTestId("word-library")).toContainText("before");
+
+  await page.getByTestId("drill-start").click();
+  const drillInput = page.getByLabel("输入当前单词");
+  await drillInput.pressSequentially("bez");
+  await expect(page.getByTestId("word-drill")).toBeVisible();
+  await expect(drillInput).toHaveValue("be");
+  await drillInput.pressSequentially("fore");
+  await expect(page.getByTestId("drill-summary")).toContainText(
+    "1 词 · 全对 0 · 错键 1",
+  );
 
   await page.keyboard.press("Escape");
   await expect(review).toBeFocused();

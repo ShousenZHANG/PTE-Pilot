@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PracticeMode } from "../domain/types";
 import {
+  type DrillState,
+  drillSkip,
+  drillType,
+  startDrill,
+} from "../practice/word-drill";
+import {
   type ConfigurableKeyAction,
   DEFAULT_ALT_KEYMAP,
   findKeymapCollisions,
@@ -72,10 +78,16 @@ const INITIAL_STATE: CockpitViewState = {
   fault: null,
 };
 
+const REDUCED_MOTION =
+  typeof matchMedia === "function" &&
+  matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 export function Cockpit(): React.JSX.Element | null {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const answerShellRef = useRef<HTMLLabelElement>(null);
-  const impactFlipRef = useRef(false);
+  const typeFxRef = useRef<HTMLDivElement>(null);
+  const typeMirrorRef = useRef<HTMLDivElement>(null);
+  const spritePoolRef = useRef<HTMLSpanElement[]>([]);
+  const spriteCursorRef = useRef(0);
   const audioBoxRef = useRef<HTMLDivElement>(null);
   const audioFillRef = useRef<HTMLElement>(null);
   const audioTimeRef = useRef<HTMLSpanElement>(null);
@@ -98,6 +110,8 @@ export function Cockpit(): React.JSX.Element | null {
   const [open, setOpen] = useState(true);
   const [panel, setPanelState] = useState<Panel>("none");
   const [commandBusy, setCommandBusy] = useState(false);
+  const [autoPlayIn, setAutoPlayIn] = useState<number | null>(null);
+  const countdownQuestionRef = useRef("");
   const [state, setState] = useState<CockpitViewState>(INITIAL_STATE);
 
   const setPanel = useCallback((nextPanel: Panel): void => {
@@ -306,6 +320,40 @@ export function Cockpit(): React.JSX.Element | null {
   const timerIdentityKey = state.identity
     ? `${state.identity.predictionEdition}:${state.identity.questionId}`
     : "";
+
+  /*
+   * Exam-style lead-in: a fresh question arms a short countdown and then
+   * auto-plays, exactly like the real test driver. Alt+P (or the footer
+   * button) skips the wait; any status change cancels the countdown.
+   */
+  useEffect(() => {
+    if (
+      !open ||
+      state.phase !== "ANSWERING" ||
+      state.audioStatus !== "EMPTY" ||
+      !timerIdentityKey
+    ) {
+      if (state.audioStatus !== "EMPTY") setAutoPlayIn(null);
+      return;
+    }
+    if (countdownQuestionRef.current === timerIdentityKey) return;
+    countdownQuestionRef.current = timerIdentityKey;
+    setAutoPlayIn(3);
+  }, [open, state.phase, state.audioStatus, timerIdentityKey]);
+
+  useEffect(() => {
+    if (autoPlayIn === null || !open) return;
+    if (autoPlayIn <= 0) {
+      setAutoPlayIn(null);
+      void controllerRef.current?.play().catch(() => undefined);
+      return;
+    }
+    const timer = setTimeout(
+      () => setAutoPlayIn((value) => (value === null ? null : value - 1)),
+      1_000,
+    );
+    return () => clearTimeout(timer);
+  }, [autoPlayIn, open]);
   useEffect(() => {
     if (timerRef.current) timerRef.current.textContent = "00:00";
     if (!timerIdentityKey) return;
@@ -523,7 +571,7 @@ export function Cockpit(): React.JSX.Element | null {
         >
           <div className="audio-box__row">
             <strong data-testid="audio-status">
-              {audioLabel(state.audioStatus, state.mode)}
+              {audioLabel(state.audioStatus, state.mode, autoPlayIn)}
             </strong>
             <span className="audio-time" ref={audioTimeRef} />
             <span className="key-hints" aria-hidden="true">
@@ -536,8 +584,10 @@ export function Cockpit(): React.JSX.Element | null {
           </div>
         </div>
 
-        <label className="answer-shell" ref={answerShellRef}>
+        <label className="answer-shell">
           <span className="sr-only">输入听到的完整句子</span>
+          <div className="type-mirror" ref={typeMirrorRef} aria-hidden="true" />
+          <div className="type-fx" ref={typeFxRef} aria-hidden="true" />
           <textarea
             ref={textareaRef}
             data-testid="answer-input"
@@ -556,11 +606,17 @@ export function Cockpit(): React.JSX.Element | null {
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
-              impactFlipRef.current = !impactFlipRef.current;
-              if (answerShellRef.current) {
-                answerShellRef.current.dataset.impact = impactFlipRef.current
-                  ? "a"
-                  : "b";
+              if (state.mode === "practice" && !REDUCED_MOTION) {
+                const native = event.nativeEvent as InputEvent;
+                spawnCharSpark(
+                  event.currentTarget,
+                  typeMirrorRef.current,
+                  typeFxRef.current,
+                  spritePoolRef.current,
+                  spriteCursorRef,
+                  native.inputType ?? "",
+                  native.data ?? null,
+                );
               }
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
               saveTimerRef.current = setTimeout(
@@ -662,6 +718,48 @@ export function Cockpit(): React.JSX.Element | null {
             {state.notice}
           </span>
         </div>
+        <nav className="footer-menu" aria-label="快捷操作">
+          <button
+            type="button"
+            className="fbtn"
+            disabled={!isActionablePhase(state.phase)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (state.phase === "COMMAND") closeCommand();
+              else openCommand();
+            }}
+          >
+            菜单 <kbd>Esc</kbd>
+          </button>
+          <button
+            type="button"
+            className="fbtn"
+            disabled={!isActionablePhase(state.phase) || !identity}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void controllerRef.current?.play()}
+          >
+            播放 <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd>
+          </button>
+          <button
+            type="button"
+            className="fbtn"
+            disabled={!isActionablePhase(state.phase) || !identity}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void controllerRef.current?.restartAudio()}
+          >
+            重播 <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd>
+          </button>
+          <button
+            type="button"
+            className="fbtn"
+            disabled={!isActionablePhase(state.phase) || !identity}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void controllerRef.current?.toggleMarked()}
+          >
+            {state.marked ? "已标记" : "标记"}{" "}
+            <kbd>Alt {state.keymap.mark?.toUpperCase()}</kbd>
+          </button>
+        </nav>
         <div className="exam-footer__actions">
           <span
             className={`mode-chip mode-chip--${state.mode}`}
@@ -856,7 +954,7 @@ function CommandLayer({
             按单键执行命令；按 <kbd>I</kbd> 或 <kbd>Esc</kbd> 回到输入。
           </p>
         )}
-        {panel === "words" && <WordLibrary words={state.words} />}
+        {panel === "words" && <WordTrainer words={state.words} />}
         {panel === "settings" && controller && (
           <SettingsPanel controller={controller} state={state} />
         )}
@@ -873,30 +971,171 @@ function CommandLayer({
   );
 }
 
-function WordLibrary({
+function WordTrainer({
   words,
 }: {
   words: CockpitViewState["words"];
 }): React.JSX.Element {
+  const [selected, setSelected] = useState<ReadonlySet<string>>(
+    () => new Set(words.slice(0, 10).map((word) => word.key)),
+  );
+  const [drill, setDrill] = useState<DrillState | null>(null);
+  const [rejectTick, setRejectTick] = useState(0);
+  const selectedCount = words.filter((word) => selected.has(word.key)).length;
+
+  const toggle = (key: string): void => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const begin = (): void => {
+    const list = words
+      .filter((word) => selected.has(word.key) && word.expected)
+      .map((word) => ({ key: word.key, expected: word.expected }));
+    if (list.length === 0) return;
+    setRejectTick(0);
+    setDrill(startDrill(list));
+  };
+
+  if (drill?.completed) {
+    const perfect = drill.results.filter(
+      (result) => !result.skipped && result.errors === 0,
+    ).length;
+    return (
+      <section data-testid="word-library">
+        <h2>训练完成</h2>
+        <p data-testid="drill-summary">
+          {drill.results.length} 词 · 全对 {perfect} · 错键 {drill.totalErrors}
+        </p>
+        <div className="drill-actions">
+          <button
+            type="button"
+            // biome-ignore lint/a11y/noAutofocus: keyboard-first panel handoff
+            autoFocus
+            onClick={() => {
+              setRejectTick(0);
+              setDrill(startDrill(drill.words));
+            }}
+          >
+            再来一轮
+          </button>
+          <button type="button" onClick={() => setDrill(null)}>
+            返回错词列表
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  if (drill) {
+    const word = drill.words[drill.index];
+    return (
+      <section data-testid="word-library" data-drill-stage="typing">
+        <h2>打字训练</h2>
+        <p className="drill-meta">
+          {drill.index + 1}/{drill.words.length} · 错键 {drill.totalErrors} ·
+          输入正确自动下一词 · <kbd>Enter</kbd> 跳过 · <kbd>Esc</kbd> 退出
+        </p>
+        <p
+          key={`${drill.index}:${rejectTick}`}
+          className={`drill-word${rejectTick > 0 ? " drill-word--shake" : ""}`}
+          data-testid="word-drill"
+        >
+          {enumerateChars(word?.expected ?? "").map(
+            ({ char, id }, position) => (
+              <span
+                key={id}
+                className={
+                  position < drill.typed.length
+                    ? "drill-char drill-char--hit"
+                    : "drill-char"
+                }
+              >
+                {char}
+              </span>
+            ),
+          )}
+        </p>
+        <input
+          className="drill-input"
+          value={drill.typed}
+          // biome-ignore lint/a11y/noAutofocus: drill is a typing surface
+          autoFocus
+          spellCheck={false}
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          aria-label="输入当前单词"
+          onChange={(event) => {
+            const step = drillType(drill, event.currentTarget.value);
+            setDrill(step.state);
+            if (step.rejected) setRejectTick((tick) => tick + 1);
+            else if (step.advanced) setRejectTick(0);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            setRejectTick(0);
+            setDrill(drillSkip(drill));
+          }}
+        />
+      </section>
+    );
+  }
+
   return (
     <section data-testid="word-library">
       <h2>错词库</h2>
       {words.length === 0 ? (
         <p>还没有错词。</p>
       ) : (
-        <ol>
-          {words.map((word) => (
-            <li key={word.key}>
-              <strong>{word.expected || "∅"}</strong>
-              <span>
-                {word.actual || "∅"} · {word.type} · {word.occurrences}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <>
+          <p className="drill-hint">
+            勾选高频错词，刷题前先做一轮打字训练热手。
+          </p>
+          <ol className="word-pick">
+            {words.map((word) => (
+              <li key={word.key}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(word.key)}
+                    onChange={() => toggle(word.key)}
+                  />
+                  <strong>{word.expected || "∅"}</strong>
+                  <span>
+                    {word.actual || "∅"} · {word.type} · {word.occurrences}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ol>
+          <button
+            type="button"
+            className="drill-start"
+            data-testid="drill-start"
+            disabled={selectedCount === 0}
+            onClick={begin}
+          >
+            开始打字训练（{selectedCount} 词）
+          </button>
+        </>
       )}
     </section>
   );
+}
+
+function enumerateChars(word: string): Array<{ char: string; id: string }> {
+  const seen = new Map<string, number>();
+  return [...word].map((char) => {
+    const occurrence = (seen.get(char) ?? 0) + 1;
+    seen.set(char, occurrence);
+    return { char, id: `${char}:${occurrence}` };
+  });
 }
 
 function RankedReview({
@@ -1019,6 +1258,12 @@ function HelpPanel({
   );
 }
 
+const ACTIONABLE_PHASES = new Set(["ANSWERING", "REVIEW", "COMMAND"]);
+
+function isActionablePhase(phase: CockpitViewState["phase"]): boolean {
+  return ACTIONABLE_PHASES.has(phase);
+}
+
 function isTransitionFocusState(
   phase: CockpitViewState["phase"],
   indexStatus: CockpitViewState["indexStatus"],
@@ -1089,6 +1334,64 @@ function formatAudioClock(seconds: number): string {
   return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-function audioLabel(status: string, mode: PracticeMode): string {
-  return mode === "exam" ? `Status: ${status} · 单次播放` : `Status: ${status}`;
+const SPARK_POOL_SIZE = 10;
+
+/*
+ * Per-character typing effect. A hidden mirror replicates the textarea's
+ * metrics to find the caret position of the character that just landed,
+ * then a pooled sprite replays a transform/opacity-only animation there.
+ * The measurement is one small offline layout; the animation itself runs
+ * entirely on the compositor, so typing latency is untouched.
+ */
+function spawnCharSpark(
+  textarea: HTMLTextAreaElement,
+  mirror: HTMLDivElement | null,
+  fx: HTMLDivElement | null,
+  pool: HTMLSpanElement[],
+  cursor: { current: number },
+  inputType: string,
+  data: string | null,
+): void {
+  if (!mirror || !fx || !inputType.startsWith("insert")) return;
+  const char = data && data.length > 0 ? data[data.length - 1] : null;
+  if (!char || char === " " || char === "\n") return;
+  const caret = textarea.selectionStart ?? textarea.value.length;
+  mirror.style.width = `${textarea.clientWidth}px`;
+  mirror.textContent = textarea.value.slice(0, Math.max(0, caret - 1));
+  const marker = document.createElement("span");
+  marker.textContent = char;
+  mirror.append(marker);
+  const x = marker.offsetLeft;
+  const y = marker.offsetTop - textarea.scrollTop;
+  if (pool.length === 0) {
+    for (let index = 0; index < SPARK_POOL_SIZE; index += 1) {
+      const sprite = document.createElement("span");
+      sprite.className = "type-spark";
+      fx.append(sprite);
+      pool.push(sprite);
+    }
+  }
+  const sprite = pool[cursor.current % pool.length];
+  cursor.current += 1;
+  if (!sprite) return;
+  sprite.textContent = char;
+  sprite.style.left = `${x}px`;
+  sprite.style.top = `${y}px`;
+  sprite.classList.remove("type-spark--run");
+  void sprite.offsetWidth;
+  sprite.classList.add("type-spark--run");
+}
+
+function audioLabel(
+  status: string,
+  mode: PracticeMode,
+  autoPlayIn: number | null,
+): string {
+  const label =
+    status === "EMPTY" && autoPlayIn !== null
+      ? `Beginning in ${autoPlayIn}s`
+      : status === "BUFFERING"
+        ? "BUFFERING · 正在加载音频"
+        : status;
+  return mode === "exam" ? `Status: ${label} · 单次播放` : `Status: ${label}`;
 }

@@ -15,6 +15,8 @@ class FakeAudioElement extends EventTarget {
   ended = false;
   currentTime = 30;
   duration = 6;
+  readyState = 4;
+  preload = "metadata";
   src = "https://upload.fireflyau.com/audio/131020.mp3";
   currentSrc = this.src;
 
@@ -147,6 +149,84 @@ describe("AudioBroker direct element control", () => {
 
     await broker.play();
     expect(playAudio).toHaveBeenCalledTimes(1);
+    expect(broker.state).toBe("PLAYING");
+  });
+
+  it("requests full preload at bind and surfaces buffering on a cold first play", async () => {
+    const element = new FakeAudioElement();
+    element.readyState = 0;
+    let releasePlay: (() => void) | undefined;
+    element.play = () =>
+      new Promise<void>((resolve) => {
+        releasePlay = () => {
+          element.paused = false;
+          resolve();
+        };
+      });
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () => [element as unknown as HTMLAudioElement],
+      }),
+    );
+    const states: string[] = [];
+    broker.addEventListener("statechange", (event) => {
+      states.push((event as CustomEvent<string>).detail);
+    });
+    broker.bind(identity.questionId, 1);
+    expect(element.preload).toBe("auto");
+
+    const playing = broker.play();
+    expect(broker.state).toBe("BUFFERING");
+    releasePlay?.();
+    await playing;
+    expect(broker.state).toBe("PLAYING");
+    expect(states).toContain("BUFFERING");
+  });
+
+  it("reports a blocked autoplay as READY with a gesture hint, never as an error", async () => {
+    const element = new FakeAudioElement();
+    element.play = () =>
+      Promise.reject(new DOMException("blocked", "NotAllowedError"));
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () => [element as unknown as HTMLAudioElement],
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+
+    await expect(broker.play()).rejects.toThrow("audio:needs-gesture");
+    expect(broker.state).toBe("READY");
+  });
+
+  it("swallows a play() aborted by a competing pause", async () => {
+    const element = new FakeAudioElement();
+    element.play = () =>
+      Promise.reject(new DOMException("interrupted", "AbortError"));
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () => [element as unknown as HTMLAudioElement],
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+
+    await expect(broker.play()).resolves.toBeUndefined();
+    expect(broker.state).not.toBe("AUDIO_ERROR");
+  });
+
+  it("adopts the newest sourced element when the site leaves several behind", async () => {
+    const stale = new FakeAudioElement();
+    const active = new FakeAudioElement();
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () =>
+          [stale, active] as unknown as HTMLAudioElement[],
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+
+    await broker.play();
+    expect(active.paused).toBe(false);
+    expect(stale.paused).toBe(true);
     expect(broker.state).toBe("PLAYING");
   });
 
