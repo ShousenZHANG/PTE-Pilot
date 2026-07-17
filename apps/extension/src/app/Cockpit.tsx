@@ -107,6 +107,7 @@ export function Cockpit(): React.JSX.Element | null {
   const [autoPlayIn, setAutoPlayIn] = useState<number | null>(null);
   const [onboardDismissed, setOnboardDismissed] = useState(false);
   const countdownQuestionRef = useRef("");
+  const autoPlayDeadlineRef = useRef(0);
   const [state, setState] = useState<CockpitViewState>(INITIAL_STATE);
 
   const setPanel = useCallback((nextPanel: Panel): void => {
@@ -333,22 +334,27 @@ export function Cockpit(): React.JSX.Element | null {
     }
     if (countdownQuestionRef.current === timerIdentityKey) return;
     countdownQuestionRef.current = timerIdentityKey;
+    autoPlayDeadlineRef.current = performance.now() + 3_000;
     setAutoPlayIn(3);
   }, [open, state.phase, state.audioStatus, timerIdentityKey]);
 
+  const countdownActive = autoPlayIn !== null;
   useEffect(() => {
-    if (autoPlayIn === null || !open) return;
-    if (autoPlayIn <= 0) {
-      setAutoPlayIn(null);
-      void controllerRef.current?.autoPlayAudio();
-      return;
-    }
-    const timer = setTimeout(
-      () => setAutoPlayIn((value) => (value === null ? null : value - 1)),
-      1_000,
-    );
-    return () => clearTimeout(timer);
-  }, [autoPlayIn, open]);
+    if (!countdownActive || !open) return;
+    // Deadline-based so the displayed seconds never drift from real time.
+    const interval = setInterval(() => {
+      const remaining = Math.ceil(
+        (autoPlayDeadlineRef.current - performance.now()) / 1_000,
+      );
+      if (remaining <= 0) {
+        setAutoPlayIn(null);
+        void controllerRef.current?.autoPlayAudio();
+        return;
+      }
+      setAutoPlayIn((value) => (value === null ? null : remaining));
+    }, 200);
+    return () => clearInterval(interval);
+  }, [countdownActive, open]);
   useEffect(() => {
     if (timerRef.current) timerRef.current.textContent = "00:00";
     if (!timerIdentityKey) return;
@@ -469,8 +475,10 @@ export function Cockpit(): React.JSX.Element | null {
         enterReleasedRef.current = false;
         await controller.submit();
       } else if (action === "play") {
+        setAutoPlayIn(null);
         await controller.play();
       } else if (action === "restart") {
+        setAutoPlayIn(null);
         await controller.restartAudio();
       } else if (action === "next") await controller.navigate("next");
       else if (action === "previous") await controller.navigate("previous");
@@ -749,7 +757,10 @@ export function Cockpit(): React.JSX.Element | null {
             className="fbtn"
             disabled={!isActionablePhase(state.phase) || !identity}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void controllerRef.current?.play()}
+            onClick={() => {
+              setAutoPlayIn(null);
+              void controllerRef.current?.play();
+            }}
           >
             播放 <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd>
           </button>
@@ -758,7 +769,10 @@ export function Cockpit(): React.JSX.Element | null {
             className="fbtn"
             disabled={!isActionablePhase(state.phase) || !identity}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void controllerRef.current?.restartAudio()}
+            onClick={() => {
+              setAutoPlayIn(null);
+              void controllerRef.current?.restartAudio();
+            }}
           >
             重播 <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd>
           </button>

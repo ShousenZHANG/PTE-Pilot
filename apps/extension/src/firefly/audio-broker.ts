@@ -59,23 +59,15 @@ export class AudioBroker extends EventTarget {
   }
 
   /*
-   * Buffer the whole clip as soon as the question is bound so the first
-   * play does not wait on the network. Merely flipping preload is not
-   * enough once the element exists, so a load() is forced while nothing
-   * has been fetched yet.
+   * Ask the browser to buffer the whole clip once the question is bound.
+   * Deliberately no load(): the site may still be swapping in the new
+   * question's src, and forcing a load here races that swap, aborts
+   * in-flight play() calls, and wipes the duration the progress readout
+   * relies on. preload=auto is honoured when the site sets the new src.
    */
   private warmUp(): void {
     const element = this.adoptElement();
-    if (!element) return;
-    if (element.preload !== "auto") element.preload = "auto";
-    const untouched = element.readyState === 0;
-    if (untouched && (element.currentSrc || element.src)) {
-      try {
-        element.load();
-      } catch {
-        // The site owns the element; playback still works without the warm-up.
-      }
-    }
+    if (element && element.preload !== "auto") element.preload = "auto";
   }
 
   setMode(mode: PracticeMode): void {
@@ -223,9 +215,13 @@ export class AudioBroker extends EventTarget {
       elements.length === 1
         ? elements
         : elements.filter((element) => element.currentSrc || element.src);
-    // Voice switching can leave several sourced elements behind; the newest
-    // one in DOM order is the active player. bind() already stopped the rest.
-    const element = candidates.length > 0 ? (candidates.at(-1) ?? null) : null;
+    // Voice switching can leave several sourced elements behind. Prefer the
+    // one that is actually playing, then the most-loaded one — that is the
+    // element the site is really driving. bind() already stopped the rest.
+    const element =
+      candidates.find((item) => !item.paused && !item.ended) ??
+      [...candidates].sort((a, b) => b.readyState - a.readyState)[0] ??
+      null;
     if (element === this.#element) return element;
     this.releaseElement();
     if (!element) return null;

@@ -230,9 +230,11 @@ describe("AudioBroker direct element control", () => {
     expect(broker.state).not.toBe("AUDIO_ERROR");
   });
 
-  it("adopts the newest sourced element when the site leaves several behind", async () => {
+  it("adopts the most-loaded element when the site leaves several behind", async () => {
     const stale = new FakeAudioElement();
+    stale.readyState = 1;
     const active = new FakeAudioElement();
+    active.readyState = 4;
     const broker = new AudioBroker(
       siteFixture({
         siteAudioElements: () =>
