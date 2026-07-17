@@ -959,7 +959,9 @@ kbd {
 .review-filters {
   display: flex;
   gap: 8px;
-  margin-bottom: 14px;
+  margin: 0 0 14px;
+  border: 0;
+  padding: 0;
 }
 
 .chip {

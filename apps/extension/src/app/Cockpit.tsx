@@ -1212,7 +1212,7 @@ function RankedReview({
       <p className="review-stats" data-testid="review-stats">
         已练 {attempted}/{entries.length} · 错题 {wrong} · 到期 {due}
       </p>
-      <div className="review-filters" role="group" aria-label="复习筛选">
+      <fieldset className="review-filters" aria-label="复习筛选">
         {REVIEW_FILTERS.map(({ id, label }) => (
           <button
             key={id}
@@ -1225,7 +1225,7 @@ function RankedReview({
             {id === "wrong" ? `（${wrong}）` : ""}
           </button>
         ))}
-      </div>
+      </fieldset>
       {visible.length === 0 ? (
         <p className="review-empty">
           {filter === "wrong" ? "没有错题——继续保持。" : "该筛选下暂无题目。"}
