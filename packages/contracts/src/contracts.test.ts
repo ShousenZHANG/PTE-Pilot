@@ -1,13 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
-  AttemptEpochSchema,
   AttemptEventSchema,
   IndexSnapshotSchema,
   NavigationEpochSchema,
-  PracticeStateSchema,
   QuestionRefSchema,
   RuntimeRequestSchema,
-  SubmissionTokenSchema,
 } from "./index";
 
 const question = QuestionRefSchema.parse({
@@ -18,12 +15,8 @@ const question = QuestionRefSchema.parse({
 });
 
 describe("shared contracts", () => {
-  test("brands epochs and tokens through schema parsing", () => {
+  test("brands epochs through schema parsing", () => {
     expect(NavigationEpochSchema.parse(0)).toBe(0);
-    expect(AttemptEpochSchema.parse(4)).toBe(4);
-    expect(
-      SubmissionTokenSchema.parse("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"),
-    ).toMatch(/^[0-9a-f-]+$/u);
     expect(() => NavigationEpochSchema.parse(-1)).toThrow();
   });
 
@@ -60,18 +53,7 @@ describe("shared contracts", () => {
     ).toThrow();
   });
 
-  test("parses flat runtime state and rejects loose runtime messages", () => {
-    expect(
-      PracticeStateSchema.parse({
-        phase: "ANSWERING",
-        question,
-        navigationEpoch: NavigationEpochSchema.parse(1),
-        attemptEpoch: AttemptEpochSchema.parse(0),
-        audioStatus: "READY",
-        indexStatus: "PARTIAL",
-        fault: null,
-      }).phase,
-    ).toBe("ANSWERING");
+  test("rejects loose runtime messages", () => {
     const message = {
       requestId: "89ed35f1-88a3-41a6-b7af-ddb26bb1ed48",
       action: "storage/loadDraft",

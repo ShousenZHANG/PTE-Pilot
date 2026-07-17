@@ -1,140 +1,81 @@
 # PTE Pilot
 
-Local-first, keyboard-first Chrome MV3 extension that rebuilds the Firefly
+[![CI](https://github.com/ShousenZHANG/PTE-Pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/ShousenZHANG/PTE-Pilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+Local-first, keyboard-first Chrome (MV3) extension that rebuilds the Firefly
 PTE **Write From Dictation** practice experience: an exam-replica cockpit,
-zero-latency typing with per-character effects, in-cockpit AI scoring with a
-word-level diff, spaced-repetition review, and a typing drill built from your
-frequently missed words.
+zero-latency typing, in-cockpit AI scoring with a word-level diff,
+spaced-repetition review, a wrong-question drive, and a typing drill built
+from your frequently missed words.
 
 The Firefly site keeps providing login, questions, original audio, scoring
 and navigation. PTE Pilot never exports the question bank, never stores full
 answer sentences, and never bypasses any entitlement. Manifest permissions:
 `storage` plus `https://www.fireflyau.com/*` — nothing else.
 
-**Quick start:** unzip `PTE-Pilot-Chrome-latest.zip` → `chrome://extensions`
-→ enable Developer mode → *Load unpacked* → open the Firefly WFD exercise
-page and log in → press `Alt+Shift+P`.
-
-**Build from source:** Node `>=24.14 <25`, pnpm `>=11.7 <12`, then
-`pnpm install --frozen-lockfile && pnpm build`. Full gate: `pnpm verify`
-(lint, typecheck, unit, build, e2e — same as CI). License: [MIT](./LICENSE).
+纯本地、键盘优先的 Chrome MV3 萤火虫 WFD 练习扩展。萤火虫继续提供登录、题目、
+原始音频、评分与切题；插件只重做练习体验，不导出题库、不存完整答案、不绕过任何权限。
 
 ---
 
-纯本地、键盘优先的 Chrome MV3 萤火虫 WFD 练习扩展。
+## 安装 / Install
 
-萤火虫继续提供登录状态、题目、原始音频、评分、答案揭示和切题。PTE Pilot 只重做练习界面：专注输入、键盘导航、词级差异、草稿、错词与本地复习。无需账号绑定、API key 或额外本机服务。
-
-## 快速使用
-
-### 使用最新 ZIP
-
-1. 解压仓库根目录的 `PTE-Pilot-Chrome-latest.zip`。
-2. 打开 `chrome://extensions`。
-3. 开启“开发者模式”。
-4. 点击“加载已解压的扩展程序”，选择解压后的目录。
-5. 打开并登录：
+1. 从 [Releases](https://github.com/ShousenZHANG/PTE-Pilot/releases) 下载最新
+   `PTE-Pilot-*-chrome.zip` 并解压
+2. 打开 `chrome://extensions`，开启右上角**开发者模式**
+3. 点击**加载已解压的扩展程序**，选择解压后的目录
+4. 登录并打开萤火虫 WFD 练习页（建议周预测入口）：
    `https://www.fireflyau.com/ptehome/exercise?pageSource=yc`
-6. 刷新萤火虫页面。
-7. 按 `Alt+Shift+P` 打开 PTE Pilot。
+5. 刷新页面，按 `Alt+Shift+P` 打开驾驶舱
 
-Chrome 不能直接加载 ZIP。扩展根目录必须直接包含 `manifest.json`。
+## 三分钟上手 / Quick guide
 
-### 从源码构建
+1. **建索引（首次一次）**：顶部橙色横幅点击**一键建立索引**。建立后才会
+   长期记录错题、错词，并解锁复习与训练。若当前页超过 300 题，先在萤火虫
+   切到周预测页再建
+2. **刷题**：进入题目自动倒计时播放（`Alt+P` 跳过等待）→ 直接打字 →
+   `Enter` 提交 → 驾驶舱内直接出 AI 评分（得分条、逐词绿/红/删除线、
+   答案、译文）→ `Enter` 下一题
+3. **刷错题**：`Esc` → `Q` 打开**错题集** → 点**只刷错题** → `Enter/J`
+   只在错题之间循环，刷完一轮自动退出
+4. **练错词**：`Esc` → `W` 打开**错词库** → 勾选 → **开始打字训练**，
+   打对变绿、打错拒键，刷题前热手
 
-要求：Node.js `>=24.14 <25`、pnpm `>=11.7 <12`。
+复习顺序由本地间隔重复驱动：答错 30 分钟内重来，全对按 1/2/4/7 天指数退场。
 
-```powershell
-Set-Location D:\PTE_Pilot
-npm install --global pnpm@11.7.0
+## 快捷键 / Shortcuts
+
+| 键 | 作用 |
+|---|---|
+| `Alt+Shift+P` | 打开 / 关闭驾驶舱 |
+| `Alt+P` | 播放 / 暂停（倒计时中 = 立即播放） |
+| `Alt+R` | 从头重播 |
+| `Enter` | 提交；结果页 = 下一题 |
+| `Alt+J` / `Alt+K` | 下一题 / 上一题 |
+| `Alt+M` | 标记本题（复习优先） |
+| `Esc` | 命令层：`Q` 错题集 · `W` 错词库 · `E` 考试模式 · `S` 设置 · `B` 建索引 |
+| 结果页 `T` / `K` / `R` | 重做 / 上一题 / 重播 |
+
+底部导航栏有对应按钮，全部支持鼠标点击。`Alt` 系列键位可在设置中自定义。
+
+## 从源码构建 / Build from source
+
+Node `>=24.14 <25`, pnpm `>=11.7 <12`:
+
+```sh
 pnpm install --frozen-lockfile
-pnpm --filter @pte-pilot/extension build
+pnpm build          # 扩展输出到 apps/extension/.output/chrome-mv3
+pnpm verify         # lint + typecheck + unit + build + e2e（与 CI 相同门禁）
 ```
 
-加载目录：
+## 隐私与边界 / Privacy & boundaries
 
-```text
-D:\PTE_Pilot\apps\extension\.output\chrome-mv3
-```
+- 所有学习数据只存本机 IndexedDB；无遥测、无外部服务
+- 只在评分后短暂读取正确答案计算词级差异，不落盘完整句子
+- 音频由页面自身的播放元素播放，不下载、不归档
+- 使用者需自行遵守萤火虫服务条款与个人订阅范围
 
-## 全键盘操作
+## License
 
-| 状态 | 按键 | 动作 |
-| --- | --- | --- |
-| 任意状态 | `Alt+Shift+P` | 打开/关闭驾驶舱 |
-| 答题 | `Alt+P` | 播放/暂停原始音频 |
-| 答题 | `Alt+R` | 从头重播 |
-| 答题 | `Enter` | 提交 |
-| 答题 | `Alt+J` / `Alt+K` | 下一题 / 上一题 |
-| 答题 | `Alt+M` | 标记/取消标记 |
-| 答题/复盘 | `Esc` | 打开命令层 |
-| 复盘 | `Enter` 或 `J` / `K` | 下一题 / 上一题 |
-| 复盘 | `Space` / `R` / `T` | 播放 / 重播 / 重做 |
-| 同步故障 | `Alt+J` / `Alt+K` | 跳过当前题并恢复同步 |
-| 故障页 | `R` / `O` / `?` | 重试 / 返回原网页 / 帮助 |
-| 命令层 | `P` / `R` / `J` / `K` / `M` | 播放 / 重播 / 切题 / 标记 |
-| 命令层 | `E` / `Q` / `W` / `S` | 模式 / 本地复习 / 错词库 / 设置 |
-| 命令层 | `B` / `I` / `?` | 建立索引 / 聚焦输入 / 帮助 |
-| 索引中 | `Esc` / `Enter` 或 `R` / `X` | 暂停 / 继续 / 取消 |
-
-推荐循环：
-
-```text
-Alt+P 听音频 → 打字 → Enter 提交 → 查看词级差异 → Enter 下一题
-```
-
-输入区使用原生、非受控 `textarea`。逐键输入不会同步写入萤火虫输入框，也不会触发 React 逐键重渲染；提交时才执行一次原生写入。
-
-## 音频
-
-- 音频始终来自当前萤火虫题目。
-- 插件驱动页面播放器，不下载、不归档、不建立音频库。
-- 当前题首次播放会验证唯一音频请求。
-- 首次验证后，暂停、继续和重播复用当前题绑定；浏览器缓存不需要再次产生网络请求。
-- 切题后旧绑定立即失效，新题重新验证。
-
-`EMPTY` 表示当前题尚未绑定音频。先按 `Alt+P`。
-
-`AUDIO_ERROR` 表示原站播放器、登录权限、网络或唯一音频验证失败。先确认萤火虫原网页本身能播放，再刷新原网页和扩展。
-
-## 本地数据
-
-- 当前页临时会话：草稿、标记和已访问题索引只留在本次扩展上下文。
-- 已验证题集：草稿、尝试、词级错误、题目进度和本地复习状态存入扩展 IndexedDB。
-- 不保存音频字节、密码、Cookie、会话令牌或完整正确句子。
-- 不向外部服务发送练习内容。
-
-## 当前页优先
-
-打开驾驶舱后立即练当前题，不自动遍历全部题目。只有按 `Esc`、再按 `B`，才显式建立完整索引。
-
-页面显示多少题，插件就以多少题为准，不硬编码“192 题”。要练周预测，先在萤火虫原网页进入周预测入口。
-
-## 权限边界
-
-扩展只需要：
-
-- `storage`：本地设置和学习数据。
-- `fireflyau.com`：读取并驱动当前练习页面（音频直接由页面自身的播放元素播放）。
-
-不申请 Cookie、下载、调试器、webRequest、全部标签页或全部网站权限。
-
-## 验证
-
-```powershell
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm test:e2e
-```
-
-完整执行：
-
-```powershell
-pnpm verify
-```
-
-## 协议
-
-[MIT](./LICENSE)。使用者需自行遵守萤火虫服务条款与个人订阅范围；本扩展不破解权限、不下载音频、不导出题库。
+[MIT](./LICENSE) · Issues and PRs welcome.

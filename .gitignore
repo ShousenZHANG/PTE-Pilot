@@ -15,3 +15,6 @@ packages/*/dist/
 apps/extension/.wxt/
 apps/extension/.output/
 PTE-Pilot-Chrome-latest/
+
+PTE-Pilot-Chrome-latest.zip
+*.zip
