@@ -74,6 +74,15 @@ export class AudioBroker extends EventTarget {
     this.#mode = mode;
   }
 
+  /*
+   * Idempotent and cheap; called repeatedly during the pre-play countdown
+   * because the site often inserts the audio element some time after bind,
+   * and a warm-up that ran too early would otherwise have missed it.
+   */
+  prewarm(): void {
+    this.warmUp();
+  }
+
   snapshot(): AudioSnapshot | null {
     const element = this.#element;
     if (!element || !Number.isFinite(element.duration)) return null;

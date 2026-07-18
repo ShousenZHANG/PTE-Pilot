@@ -154,6 +154,23 @@ describe("AudioBroker direct element control", () => {
     expect(broker.state).toBe("PLAYING");
   });
 
+  it("prewarms an audio element the site inserts after bind", () => {
+    const element = new FakeAudioElement();
+    let inserted = false;
+    const broker = new AudioBroker(
+      siteFixture({
+        siteAudioElements: () =>
+          inserted ? [element as unknown as HTMLAudioElement] : [],
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+    expect(element.preload).toBe("metadata");
+
+    inserted = true;
+    broker.prewarm();
+    expect(element.preload).toBe("auto");
+  });
+
   it("requests full preload at bind and surfaces buffering on a cold first play", async () => {
     const element = new FakeAudioElement();
     element.readyState = 0;

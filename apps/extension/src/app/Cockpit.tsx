@@ -363,6 +363,9 @@ export function Cockpit(): React.JSX.Element | null {
     if (!countdownActive || !open) return;
     // Deadline-based so the displayed seconds never drift from real time.
     const interval = setInterval(() => {
+      // The site may insert the audio element after bind; keep re-warming so
+      // the clip is fully buffered by the time the countdown fires.
+      controllerRef.current?.prewarmAudio();
       const remaining = Math.ceil(
         (autoPlayDeadlineRef.current - performance.now()) / 1_000,
       );
@@ -1485,6 +1488,8 @@ function audioLabel(
       ? `Beginning in ${autoPlayIn}s`
       : status === "BUFFERING"
         ? "BUFFERING · 正在加载音频"
-        : status;
+        : status === "READY"
+          ? "READY · 按 Alt+P 播放"
+          : status;
   return mode === "exam" ? `Status: ${label} · 单次播放` : `Status: ${label}`;
 }

@@ -740,6 +740,10 @@ export class PracticeController extends EventTarget {
     return this.#audio?.snapshot() ?? null;
   }
 
+  prewarmAudio(): void {
+    this.#audio?.prewarm();
+  }
+
   /*
    * Countdown-driven playback is best-effort convenience: whatever goes
    * wrong, it must degrade to a hint, never to AUDIO_ERROR. Manual play

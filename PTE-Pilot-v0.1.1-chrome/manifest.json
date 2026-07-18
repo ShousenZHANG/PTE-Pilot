@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "PTE Pilot",
+  "description": "Local-first PTE Write From Dictation practice assistant",
+  "version": "0.1.0",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.fireflyau.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.fireflyau.com/ptehome/exercise*"],
+      "run_at": "document_idle",
+      "js": ["content-scripts/firefly.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content-scripts/firefly.css"],
+      "use_dynamic_url": true,
+      "matches": ["https://www.fireflyau.com/*"]
+    }
+  ]
+}
