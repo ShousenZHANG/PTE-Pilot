@@ -23,8 +23,9 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await expect(cockpit).toBeVisible();
   await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
   await expect(page.getByTestId("audio-status")).toContainText("Beginning in");
-  await page.keyboard.press("Alt+KeyP");
-  await expect(page.getByTestId("audio-status")).toContainText("PLAYING");
+  await expect(page.getByTestId("audio-status")).toContainText("PLAYING", {
+    timeout: 8_000,
+  });
   await expect
     .poll(() =>
       page

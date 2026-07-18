@@ -105,7 +105,12 @@ export function Cockpit(): React.JSX.Element | null {
   const [open, setOpen] = useState(true);
   const [panel, setPanelState] = useState<Panel>("none");
   const [commandBusy, setCommandBusy] = useState(false);
-  const [autoPlayIn, setAutoPlayIn] = useState<number | null>(null);
+  const [autoPlayIn, setAutoPlayInState] = useState<number | null>(null);
+  const autoPlayInRef = useRef<number | null>(null);
+  const setAutoPlayIn = useCallback((value: number | null): void => {
+    autoPlayInRef.current = value;
+    setAutoPlayInState(value);
+  }, []);
   const [onboardDismissed, setOnboardDismissed] = useState(false);
   const countdownQuestionRef = useRef("");
   const autoPlayDeadlineRef = useRef(0);
@@ -214,10 +219,13 @@ export function Cockpit(): React.JSX.Element | null {
         }
       };
 
-      if (action === "play") {
-        await runBusy(() => controller.play(), closeCommand);
-      } else if (action === "restart") {
-        await runBusy(() => controller.restartAudio(), closeCommand);
+      if (action === "play" || action === "restart") {
+        if (autoPlayInRef.current !== null) return;
+        await runBusy(
+          () =>
+            action === "play" ? controller.play() : controller.restartAudio(),
+          closeCommand,
+        );
       } else if (action === "mark") {
         await runBusy(() => controller.toggleMarked(), closeCommand);
       } else if (action === "toggle-mode") {
@@ -354,9 +362,9 @@ export function Cockpit(): React.JSX.Element | null {
     }
     if (countdownQuestionRef.current === timerIdentityKey) return;
     countdownQuestionRef.current = timerIdentityKey;
-    autoPlayDeadlineRef.current = performance.now() + 3_000;
+    autoPlayDeadlineRef.current = performance.now() + AUTO_PLAY_LEAD_MS;
     controllerRef.current?.prewarmAudio();
-    setAutoPlayIn(3);
+    setAutoPlayIn(AUTO_PLAY_LEAD_MS / 1_000);
   }, [open, state.phase, state.audioStatus, timerIdentityKey]);
 
   const countdownActive = autoPlayIn !== null;
@@ -375,7 +383,7 @@ export function Cockpit(): React.JSX.Element | null {
         void controllerRef.current?.autoPlayAudio();
         return;
       }
-      setAutoPlayIn((value) => (value === null ? null : remaining));
+      if (autoPlayInRef.current !== null) setAutoPlayIn(remaining);
     }, 200);
     return () => clearInterval(interval);
   }, [countdownActive, open]);
@@ -499,10 +507,10 @@ export function Cockpit(): React.JSX.Element | null {
         enterReleasedRef.current = false;
         await controller.submit();
       } else if (action === "play") {
-        setAutoPlayIn(null);
+        if (autoPlayInRef.current !== null) return;
         await controller.play();
       } else if (action === "restart") {
-        setAutoPlayIn(null);
+        if (autoPlayInRef.current !== null) return;
         await controller.restartAudio();
       } else if (action === "next") await controller.navigate("next");
       else if (action === "previous") await controller.navigate("previous");
@@ -784,24 +792,26 @@ export function Cockpit(): React.JSX.Element | null {
           <button
             type="button"
             className="fbtn"
-            disabled={!isActionablePhase(state.phase) || !identity}
+            disabled={
+              !isActionablePhase(state.phase) ||
+              !identity ||
+              autoPlayIn !== null
+            }
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              setAutoPlayIn(null);
-              void controllerRef.current?.play();
-            }}
+            onClick={() => void controllerRef.current?.play()}
           >
             播放 <kbd>Alt {state.keymap.play?.toUpperCase()}</kbd>
           </button>
           <button
             type="button"
             className="fbtn"
-            disabled={!isActionablePhase(state.phase) || !identity}
+            disabled={
+              !isActionablePhase(state.phase) ||
+              !identity ||
+              autoPlayIn !== null
+            }
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              setAutoPlayIn(null);
-              void controllerRef.current?.restartAudio();
-            }}
+            onClick={() => void controllerRef.current?.restartAudio()}
           >
             重播 <kbd>Alt {state.keymap.restart?.toUpperCase()}</kbd>
           </button>
@@ -1206,6 +1216,12 @@ function enumerateChars(word: string): Array<{ char: string; id: string }> {
 }
 
 type ReviewFilter = "all" | "wrong" | "new" | "due";
+
+/*
+ * Exam-style enforced lead-in: playback cannot be started or restarted
+ * during the countdown, exactly like the real test driver.
+ */
+const AUTO_PLAY_LEAD_MS = 5_000;
 
 const REVIEW_FILTERS: Array<{ id: ReviewFilter; label: string }> = [
   { id: "all", label: "全部" },
