@@ -454,14 +454,14 @@ export class PracticeController extends EventTarget {
       return;
     }
     const identity = this.#state.identity;
-    const epoch = this.#latestNavigationEpoch;
+    // A submission outlives a same-question re-initialization on purpose:
+    // the result is still about this exact question.
+    const ticket = this.ticket(identity);
+    const isCurrent = () => ticket.valid({ site: true, generation: false });
     this.patch({ phase: "SUBMITTING", notice: "正在调用萤火虫评分" });
     try {
       const result = await this.#answerGate.submit(draft);
-      if (
-        result.context.questionId !== identity.questionId ||
-        !this.isCurrentQuestion(identity, epoch)
-      ) {
+      if (result.context.questionId !== identity.questionId || !isCurrent()) {
         throw new Error("submission:question-mismatch");
       }
       const review: ReviewResult = result.review;
@@ -480,7 +480,7 @@ export class PracticeController extends EventTarget {
       if (canPersistPredictionEdition(identity.predictionEdition)) {
         await this.#runtime.commitAttempt(identity.predictionEdition, attempt);
       }
-      if (!this.isCurrentQuestion(identity, epoch)) return;
+      if (!isCurrent()) return;
       this.patch({
         phase: "REVIEW",
         review,
@@ -491,7 +491,7 @@ export class PracticeController extends EventTarget {
             : "完全正确",
       });
     } catch (error) {
-      if (!this.isCurrentQuestion(identity, epoch)) return;
+      if (!isCurrent()) return;
       this.fail("DESYNC", "提交链路已暂停", error);
     }
   }
@@ -845,7 +845,7 @@ export class PracticeController extends EventTarget {
   async toggleMarked(): Promise<void> {
     const identity = this.#state.identity;
     if (!identity) return;
-    const epoch = this.#latestNavigationEpoch;
+    const ticket = this.ticket(identity);
     const marked = !this.#state.marked;
     if (canPersistPredictionEdition(identity.predictionEdition)) {
       await this.#runtime.setMarked(
@@ -856,7 +856,7 @@ export class PracticeController extends EventTarget {
     } else {
       this.#sessionMarks.set(sessionQuestionKey(identity), marked);
     }
-    if (!this.isCurrentQuestion(identity, epoch)) return;
+    if (!ticket.valid({ site: true, generation: false })) return;
     this.patch({ marked, notice: marked ? "已标记" : "已取消标记" });
   }
 
