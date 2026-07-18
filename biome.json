@@ -11,6 +11,7 @@
       "!**/coverage",
       "!**/test-results",
       "!**/playwright-report",
+      "!tests/fixtures",
       "!PTE-Pilot-Chrome-latest",
       "!PTE-Pilot-*-chrome",
       "!packages/*/dist"
