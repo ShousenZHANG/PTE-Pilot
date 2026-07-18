@@ -160,65 +160,8 @@ describe("PracticeController operation context", () => {
     expect(checkpoints.snapshot?.orderedQuestionIds).toEqual(["q-1", "q-2"]);
   });
 
-  it("invalidates redo completion when identity, epoch, or generation changes", async () => {
-    const module = (await import("./practice-controller")) as unknown as Record<
-      string,
-      unknown
-    >;
-    expect(module.isSameControllerOperation).toBeTypeOf("function");
-    const isSameControllerOperation = module.isSameControllerOperation as (
-      captured: {
-        predictionEdition: string;
-        questionId: string;
-        position: number;
-        total: number;
-        navigationEpoch: number;
-        initializeGeneration: number;
-      },
-      current: {
-        predictionEdition: string | undefined;
-        questionId: string | undefined;
-        position: number | undefined;
-        total: number | undefined;
-        navigationEpoch: number;
-        initializeGeneration: number;
-      },
-    ) => boolean;
-    const captured = {
-      predictionEdition: "weekly-2026-W29",
-      questionId: "131020",
-      position: 12,
-      total: 192,
-      navigationEpoch: 4,
-      initializeGeneration: 2,
-    };
-
-    expect(isSameControllerOperation(captured, captured)).toBe(true);
-    expect(
-      isSameControllerOperation(captured, {
-        ...captured,
-        questionId: "131021",
-      }),
-    ).toBe(false);
-    expect(
-      isSameControllerOperation(captured, {
-        ...captured,
-        position: 13,
-      }),
-    ).toBe(false);
-    expect(
-      isSameControllerOperation(captured, {
-        ...captured,
-        navigationEpoch: 5,
-      }),
-    ).toBe(false);
-    expect(
-      isSameControllerOperation(captured, {
-        ...captured,
-        initializeGeneration: 3,
-      }),
-    ).toBe(false);
-  });
+  // Redo-context staleness (identity/epoch/generation) is covered by the
+  // OperationTicket suite in operation-guard.test.ts.
 
   it("drops an old redo timeout after its controller context becomes stale", async () => {
     const module = (await import("./practice-controller")) as unknown as Record<

@@ -64,15 +64,6 @@ export interface CockpitViewState {
   fault: RuntimeFault | null;
 }
 
-export interface ControllerOperationContext {
-  predictionEdition: string;
-  questionId: string;
-  position: number;
-  total: number;
-  navigationEpoch: number;
-  initializeGeneration: number;
-}
-
 const NAVIGABLE_PHASES = new Set<PracticePhase>([
   "ANSWERING",
   "REVIEW",
@@ -82,27 +73,6 @@ const NAVIGABLE_PHASES = new Set<PracticePhase>([
 
 export function canNavigateFromPhase(phase: PracticePhase): boolean {
   return NAVIGABLE_PHASES.has(phase);
-}
-
-export function isSameControllerOperation(
-  captured: ControllerOperationContext,
-  current: {
-    predictionEdition: string | undefined;
-    questionId: string | undefined;
-    position: number | undefined;
-    total: number | undefined;
-    navigationEpoch: number;
-    initializeGeneration: number;
-  },
-): boolean {
-  return (
-    captured.predictionEdition === current.predictionEdition &&
-    captured.questionId === current.questionId &&
-    captured.position === current.position &&
-    captured.total === current.total &&
-    captured.navigationEpoch === current.navigationEpoch &&
-    captured.initializeGeneration === current.initializeGeneration
-  );
 }
 
 export async function runGuardedControllerOperation(options: {
@@ -650,18 +620,11 @@ export class PracticeController extends EventTarget {
     )
       return;
     const answerGate = this.#answerGate;
-    const operation: ControllerOperationContext = {
-      predictionEdition: this.#state.identity.predictionEdition,
-      questionId: this.#state.identity.questionId,
-      position: this.#state.identity.position,
-      total: this.#state.identity.total,
-      navigationEpoch: this.#latestNavigationEpoch,
-      initializeGeneration: this.#initializeGeneration,
-    };
+    const ticket = this.ticket(this.#state.identity);
     this.patch({ phase: "RESETTING", review: null, notice: "" });
     await runGuardedControllerOperation({
       run: () => answerGate.redo(),
-      isCurrent: () => this.isCurrentRedo(operation, answerGate),
+      isCurrent: () => ticket.valid({ phase: "RESETTING", site: true }),
       onSuccess: () => {
         this.#replayCount = 0;
         this.#startedAt = performance.now();
@@ -836,13 +799,11 @@ export class PracticeController extends EventTarget {
       this.patch({ notice: "完整索引后才能生成本地复习顺序" });
       return false;
     }
-    const initializeGeneration = this.#initializeGeneration;
+    const ticket = this.ticket(identity);
     const requestGeneration = ++this.#rankRequestGeneration;
     const isCurrent = () =>
-      this.isCurrentInitialization(initializeGeneration) &&
-      requestGeneration === this.#rankRequestGeneration &&
-      this.#state.phase === "COMMAND" &&
-      sameIdentity(this.#state.identity, identity);
+      ticket.valid({ phase: "COMMAND", epoch: "any" }) &&
+      requestGeneration === this.#rankRequestGeneration;
     try {
       const { snapshot: indexSnapshot, questions } =
         await this.#runtime.loadIndexSnapshot(identity.predictionEdition);
@@ -955,12 +916,8 @@ export class PracticeController extends EventTarget {
     const navigation = this.#navigation;
     const identity = this.#state.identity;
     const generation = this.#initializeGeneration;
-    const isCurrent = () =>
-      this.#indexer === indexer &&
-      this.#navigation === navigation &&
-      this.isCurrentInitialization(generation) &&
-      this.#state.phase === "NAVIGATING" &&
-      sameIdentity(this.#state.identity, identity);
+    const ticket = this.ticket(identity);
+    const isCurrent = () => ticket.valid({ phase: "NAVIGATING", epoch: "any" });
     const traversal = indexer.controlledTraversal(this.flushDraft());
     this.patch({
       phase: "NAVIGATING",
@@ -1407,47 +1364,12 @@ export class PracticeController extends EventTarget {
     );
   }
 
-  private isCurrentNavigationOperation(
-    navigation: NavigationCoordinator,
-    capturedIdentity: QuestionIdentity,
-    expectedSiteIdentity: QuestionIdentity,
-    expectedEpoch: number,
-    generation: number,
-  ): boolean {
-    if (
-      this.#navigation !== navigation ||
-      !this.isCurrentInitialization(generation) ||
-      this.#state.phase !== "NAVIGATING" ||
-      this.#latestNavigationEpoch !== expectedEpoch ||
-      !sameIdentity(this.#state.identity, capturedIdentity)
-    )
-      return false;
-    try {
-      return sameIdentity(this.#site.readIdentity(), expectedSiteIdentity);
-    } catch {
-      return false;
-    }
-  }
-
   private isSiteAt(identity: QuestionIdentity): boolean {
     try {
       return sameIdentity(this.#site.readIdentity(), identity);
     } catch {
       return false;
     }
-  }
-
-  private shouldReportNavigationFailure(
-    navigation: NavigationCoordinator,
-    capturedIdentity: QuestionIdentity,
-    generation: number,
-  ): boolean {
-    return (
-      this.#navigation === navigation &&
-      this.isCurrentInitialization(generation) &&
-      this.#state.phase === "NAVIGATING" &&
-      sameIdentity(this.#state.identity, capturedIdentity)
-    );
   }
 
   private isCurrentQuestion(
@@ -1460,39 +1382,6 @@ export class PracticeController extends EventTarget {
       sameIdentity(this.#state.identity, identity) &&
       this.isSiteAt(identity)
     );
-  }
-
-  private isCurrentRedo(
-    captured: ControllerOperationContext,
-    answerGate: AnswerGate,
-  ): boolean {
-    if (
-      this.#disposed ||
-      this.#state.phase !== "RESETTING" ||
-      this.#answerGate !== answerGate ||
-      !isSameControllerOperation(captured, {
-        predictionEdition: this.#state.identity?.predictionEdition,
-        questionId: this.#state.identity?.questionId,
-        position: this.#state.identity?.position,
-        total: this.#state.identity?.total,
-        navigationEpoch: this.#latestNavigationEpoch,
-        initializeGeneration: this.#initializeGeneration,
-      })
-    )
-      return false;
-    try {
-      const siteIdentity = this.#site.readIdentity();
-      return isSameControllerOperation(captured, {
-        predictionEdition: siteIdentity.predictionEdition,
-        questionId: siteIdentity.questionId,
-        position: siteIdentity.position,
-        total: siteIdentity.total,
-        navigationEpoch: this.#latestNavigationEpoch,
-        initializeGeneration: this.#initializeGeneration,
-      });
-    } catch {
-      return false;
-    }
   }
 
   private async teardownActivePorts(): Promise<void> {
