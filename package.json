@@ -18,10 +18,11 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.4",
     "@playwright/test": "1.61.1",
     "@types/node": "24.13.3",
-    "@biomejs/biome": "2.5.4",
     "fake-indexeddb": "6.2.5",
+    "happy-dom": "^20.10.6",
     "typescript": "6.0.3",
     "vitest": "4.1.10"
   }
