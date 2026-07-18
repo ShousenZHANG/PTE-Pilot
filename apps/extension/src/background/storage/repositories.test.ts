@@ -196,6 +196,79 @@ describe("CockpitRepositories", () => {
     ).resolves.toBeNull();
   });
 
+  test("admits only trainable answer words into the word library", async () => {
+    const mixed: AttemptEvent = {
+      ...attempt,
+      attemptId: "99999999-9999-4999-8999-999999999999",
+      errors: [
+        { expected: "", actual: "ahiaiiifamos", type: "extra" },
+        { expected: "the", actual: "", type: "missing" },
+        { expected: "before", actual: "", type: "missing" },
+        { expected: "assignments", actual: "assigments", type: "spelling" },
+      ],
+    };
+    await repository.commitAttempt("yc-2026-w29", mixed);
+    const words = await db.wordStats.toArray();
+    expect(words).toHaveLength(1);
+    expect(words[0]?.expected).toBe("assignments");
+  });
+
+  test("migration purges legacy junk from the word library", async () => {
+    const databaseName = `pte-pilot-wordstats-${crypto.randomUUID()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(2).stores({
+      drafts:
+        "&[predictionEdition+questionId], predictionEdition, questionId, updatedAt",
+      attempts: "&attemptId, questionId, completedAt",
+      wordStats: "&key, expected, lastSeenAt",
+      questionProgress:
+        "&[predictionEdition+questionId], predictionEdition, questionId, dueAt, marked",
+      questions:
+        "&[predictionEdition+questionId], predictionEdition, questionId, sitePosition",
+      snapshots: "&predictionEdition",
+      sessions: "&id, predictionEdition, questionId, updatedAt",
+      settings: "&id, updatedAt",
+      meta: "&id",
+    });
+    await legacy.open();
+    await legacy.table("wordStats").bulkPut([
+      {
+        key: "extra:junk",
+        expected: "",
+        actual: "ahiaiiifamos",
+        type: "extra",
+        occurrences: 1,
+        lastSeenAt: "2026-07-15T10:00:00.000Z",
+      },
+      {
+        key: "missing:the",
+        expected: "the",
+        actual: "",
+        type: "missing",
+        occurrences: 4,
+        lastSeenAt: "2026-07-15T10:00:00.000Z",
+      },
+      {
+        key: "spelling:economic",
+        expected: "economic",
+        actual: "economci",
+        type: "spelling",
+        occurrences: 2,
+        lastSeenAt: "2026-07-15T10:00:00.000Z",
+      },
+    ]);
+    legacy.close();
+
+    const migrated = createPtePilotDb(databaseName);
+    try {
+      const words = await migrated.wordStats.toArray();
+      expect(words).toHaveLength(1);
+      expect(words[0]?.expected).toBe("economic");
+    } finally {
+      await migrated.delete();
+    }
+  });
+
   test("is idempotent for the same attemptId", async () => {
     await repository.commitAttempt("yc-2026-w29", attempt);
     await repository.commitAttempt("yc-2026-w29", attempt);

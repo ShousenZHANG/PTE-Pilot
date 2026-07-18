@@ -6,6 +6,7 @@ import type {
   UserSettings,
 } from "@pte-pilot/contracts";
 import Dexie, { type Table } from "dexie";
+import { isTrainableWord } from "../../learning/word-filter";
 
 export interface WordStatRecord {
   key: string;
@@ -83,6 +84,14 @@ export class PtePilotDb extends Dexie {
           .table("meta")
           .bulkDelete(["projection-instance-id", "projection-version"]),
       );
+    // Purge word-library entries recorded before the admission policy:
+    // extra words (empty expected), probe letters and function words.
+    this.version(3).upgrade((transaction) =>
+      transaction
+        .table<WordStatRecord>("wordStats")
+        .filter((record) => !isTrainableWord(record.expected))
+        .delete(),
+    );
   }
 }
 

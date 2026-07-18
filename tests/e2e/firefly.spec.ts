@@ -53,7 +53,7 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
 
   const answer = page.getByTestId("answer-input");
   await answer.pressSequentially(
-    "Students should submit their assignments by Friday",
+    "Students should submit their assigments before Friday",
   );
   await expect(page.locator(".answer-foot output")).toHaveText(
     "Total Word Count: 7",
@@ -62,8 +62,8 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await page.keyboard.press("Control+Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
   const review = page.getByTestId("review-result");
-  await expect(review).toContainText("before");
-  await expect(review).toContainText("by");
+  await expect(review).toContainText("assignments");
+  await expect(review).toContainText("assigments");
   await expect(page.getByTestId("review-answer")).toContainText(
     "Students should submit their assignments before Friday",
   );
@@ -88,14 +88,14 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("command-layer")).toBeVisible();
   await page.keyboard.press("KeyW");
-  await expect(page.getByTestId("word-library")).toContainText("before");
+  await expect(page.getByTestId("word-library")).toContainText("assignments");
 
   await page.getByTestId("drill-start").click();
   const drillInput = page.getByLabel("输入当前单词");
-  await drillInput.pressSequentially("bez");
+  await drillInput.pressSequentially("assiz");
   await expect(page.getByTestId("word-drill")).toBeVisible();
-  await expect(drillInput).toHaveValue("be");
-  await drillInput.pressSequentially("fore");
+  await expect(drillInput).toHaveValue("assi");
+  await drillInput.pressSequentially("gnments");
   await expect(page.getByTestId("drill-summary")).toContainText(
     "1 词 · 全对 0 · 错键 1",
   );
@@ -171,7 +171,7 @@ test("restores the verified set and learning data after a reload", async ({
 
   const answer = page.getByTestId("answer-input");
   await answer.pressSequentially(
-    "Students should submit their assignments by Friday",
+    "Students should submit their assigments before Friday",
   );
   await page.keyboard.press("Control+Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
@@ -185,7 +185,7 @@ test("restores the verified set and learning data after a reload", async ({
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("command-layer")).toBeVisible();
   await page.keyboard.press("KeyW");
-  await expect(page.getByTestId("word-library")).toContainText("before");
+  await expect(page.getByTestId("word-library")).toContainText("assignments");
 
   // Wrong-question drive across questions must use the lazily rendered
   // custom picker for a direct jump instead of stepping one by one.

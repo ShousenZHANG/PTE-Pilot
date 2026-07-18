@@ -17,6 +17,7 @@ import {
   type WordStatSummary,
 } from "@pte-pilot/contracts";
 import { scheduleNextReview } from "../../learning/spaced-repetition";
+import { isTrainableWord } from "../../learning/word-filter";
 import type {
   PtePilotDb,
   QuestionProgressRecord,
@@ -145,6 +146,9 @@ export class CockpitRepositories {
         await this.db.questionProgress.put(progress);
 
         for (const error of attempt.errors) {
+          // Only answer-side words with drilling value enter the library:
+          // the learner's own extra words and short function words do not.
+          if (!isTrainableWord(error.expected)) continue;
           const key = wordKey(error);
           const previous = await this.db.wordStats.get(key);
           const word: WordStatRecord = {
