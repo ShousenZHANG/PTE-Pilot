@@ -1,6 +1,5 @@
 import {
   type AttemptEvent,
-  type DraftCheckpoint,
   type IndexedQuestion,
   type IndexSnapshot,
   type RankCandidateSnapshot,
@@ -16,27 +15,6 @@ import {
 type RuntimeAction = RuntimeRequest["action"];
 
 export class RuntimeClient {
-  async loadDraft(
-    predictionEdition: string,
-    questionId: string,
-  ): Promise<DraftCheckpoint | null> {
-    const response = await this.send({
-      requestId: crypto.randomUUID(),
-      action: "storage/loadDraft",
-      predictionEdition,
-      questionId,
-    });
-    return assertAction(response, "storage/loadDraft").draft;
-  }
-
-  async saveDraft(draft: DraftCheckpoint): Promise<void> {
-    await this.send({
-      requestId: crypto.randomUUID(),
-      action: "storage/saveDraft",
-      draft,
-    });
-  }
-
   async commitAttempt(
     predictionEdition: string,
     attempt: AttemptEvent,

@@ -37,14 +37,11 @@ class InvalidRuntimeRequestError extends Error {}
 
 function predictionEditions(request: RuntimeRequest): readonly string[] {
   switch (request.action) {
-    case "storage/loadDraft":
     case "storage/commitAttempt":
     case "storage/setMarked":
     case "storage/getRankCandidates":
     case "storage/loadIndexSnapshot":
       return [request.predictionEdition];
-    case "storage/saveDraft":
-      return [request.draft.predictionEdition];
     case "storage/saveSession":
       return [request.question.predictionEdition];
     case "storage/saveIndexSnapshot":
@@ -105,19 +102,6 @@ async function execute(
 ): Promise<RuntimeResponse> {
   const { repository } = dependencies;
   switch (request.action) {
-    case "storage/loadDraft":
-      return {
-        requestId: request.requestId,
-        ok: true,
-        action: request.action,
-        draft: await repository.loadDraft(
-          request.predictionEdition,
-          request.questionId,
-        ),
-      };
-    case "storage/saveDraft":
-      await repository.saveDraft(request.draft);
-      return { requestId: request.requestId, ok: true, action: request.action };
     case "storage/commitAttempt":
       await repository.commitAttempt(
         request.predictionEdition,

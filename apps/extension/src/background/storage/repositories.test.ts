@@ -38,8 +38,10 @@ describe("CockpitRepositories", () => {
     await db.delete();
   });
 
-  test("removes legacy outbox from the current database schema", () => {
-    expect(db.tables.map((table) => table.name)).not.toContain("outbox");
+  test("removes legacy outbox and drafts from the current database schema", () => {
+    const tables = db.tables.map((table) => table.name);
+    expect(tables).not.toContain("outbox");
+    expect(tables).not.toContain("drafts");
   });
 
   test("migration deletes legacy sync queue and projection metadata", async () => {
@@ -314,27 +316,6 @@ describe("CockpitRepositories", () => {
       (await repository.getRankCandidates("yc-2026-w29", [attempt.questionId]))
         .learnerStateVersion,
     ).toBe(afterMark.learnerStateVersion);
-  });
-
-  test("isolates drafts and progress through edition-question compound keys", async () => {
-    const base = {
-      questionId: "131020",
-      text: "one",
-      revision: 1,
-      updatedAt: "2026-07-15T10:00:00.000Z",
-    };
-    await repository.saveDraft({ ...base, predictionEdition: "yc-2026-w29" });
-    await repository.saveDraft({
-      ...base,
-      predictionEdition: "yc-2026-w30",
-      text: "two",
-    });
-    expect((await repository.loadDraft("yc-2026-w29", "131020"))?.text).toBe(
-      "one",
-    );
-    expect((await repository.loadDraft("yc-2026-w30", "131020"))?.text).toBe(
-      "two",
-    );
   });
 
   test("complete index replaces stale edition rows and validates 1..N", async () => {

@@ -56,12 +56,13 @@ describe("shared contracts", () => {
   test("rejects loose runtime messages", () => {
     const message = {
       requestId: "89ed35f1-88a3-41a6-b7af-ddb26bb1ed48",
-      action: "storage/loadDraft",
+      action: "storage/setMarked",
       predictionEdition: "yc-2026-w29",
       questionId: "131020",
+      marked: true,
     };
     expect(RuntimeRequestSchema.parse(message).action).toBe(
-      "storage/loadDraft",
+      "storage/setMarked",
     );
     expect(() =>
       RuntimeRequestSchema.parse({ ...message, arbitrary: true }),

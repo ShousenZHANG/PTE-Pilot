@@ -69,25 +69,26 @@ describe("runtime handler", () => {
   test.each(["provisional:bootstrap", "session:current-tab"])(
     "blocks ephemeral prediction edition %s",
     async (predictionEdition) => {
-      const loadDraft = vi.fn();
-      const handler = handlerWith({ loadDraft });
+      const setMarked = vi.fn();
+      const handler = handlerWith({ setMarked });
 
       await expect(
         handler(
           {
             requestId,
-            action: "storage/loadDraft",
+            action: "storage/setMarked",
             predictionEdition,
             questionId: "131020",
+            marked: true,
           },
           trustedSender,
         ),
       ).resolves.toMatchObject({
-        action: "storage/loadDraft",
+        action: "storage/setMarked",
         ok: false,
         reason: "invalid-request",
       });
-      expect(loadDraft).not.toHaveBeenCalled();
+      expect(setMarked).not.toHaveBeenCalled();
     },
   );
 });

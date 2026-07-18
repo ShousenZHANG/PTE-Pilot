@@ -93,10 +93,8 @@ export class PracticeController extends EventTarget {
   #checkpoints: ControllerIndexCheckpoints | null = null;
   #predictionBootstrap: PredictionEditionBootstrap | null = null;
   #sessionMode = false;
-  readonly #sessionDrafts = new Map<string, string>();
   readonly #sessionMarks = new Map<string, boolean>();
   #settings: UserSettings = defaultSettings();
-  #draftRevision = 0;
   #startedAt = performance.now();
   #replayCount = 0;
   #latestNavigationEpoch = 0;
@@ -269,7 +267,7 @@ export class PracticeController extends EventTarget {
           indexStatus: "IDLE",
           notice: "周预测题集已变化，正在重新验证",
         });
-        void this.initialize(this.flushDraft().catch(() => undefined));
+        void this.initialize();
         return;
       }
       if (
@@ -309,10 +307,7 @@ export class PracticeController extends EventTarget {
       ).catch(() => this.#site.readIdentity());
     }
     if (!this.isCurrentInitialization(generation)) return;
-    const [draft, marked] = await Promise.all([
-      this.safeLoadDraft(activeIdentity),
-      this.readMarked(activeIdentity),
-    ]);
+    const marked = await this.readMarked(activeIdentity);
     if (!this.isCurrentInitialization(generation)) return;
     const current = this.#site.readIdentity();
     if (
@@ -352,7 +347,7 @@ export class PracticeController extends EventTarget {
       mode: this.#settings.mode,
       keymap: { ...this.#settings.keymap },
       identity: activeIdentity,
-      draft,
+      draft: "",
       marked,
       siteStatus: "已同步",
       audioStatus: "EMPTY",
@@ -447,8 +442,6 @@ export class PracticeController extends EventTarget {
       return;
     }
     this.patch({ phase: "NAVIGATING", notice: "", siteStatus: "正在切题" });
-    await this.flushDraft().catch(() => undefined);
-    if (!ticket.valid({ phase: "NAVIGATING", site: true })) return;
     try {
       const result = await navigation.navigate({ kind });
       if (
@@ -504,8 +497,6 @@ export class PracticeController extends EventTarget {
       this.patch({ phase: returnPhase, notice: "索引中没有该题" });
       return;
     }
-    await this.flushDraft().catch(() => undefined);
-    if (!ticket.valid({ phase: "NAVIGATING", site: true })) return;
     this.patch({ siteStatus: "正在跳转复习题" });
     try {
       let result:
@@ -831,19 +822,13 @@ export class PracticeController extends EventTarget {
       return false;
     }
     this.#reviewQueue = [...questionIds];
-    const position = queuePosition(this.#reviewQueue, identity.questionId);
     this.patch({
-      reviewQueue: {
-        position: position ?? 1,
-        total: this.#reviewQueue.length,
-      },
+      reviewQueue: { position: 1, total: this.#reviewQueue.length },
       notice: "错题循环开启；Enter/J 只在错题之间切换",
     });
-    if (position !== null) {
-      // Already on a wrong question: stay and leave the command layer.
-      this.setCommand(false);
-      return true;
-    }
+    // The drive always (re)starts at the first queued question — even when
+    // the current question is somewhere in the queue — so a fresh round
+    // begins from the top with a clean answer box.
     const first = this.#reviewQueue[0];
     if (first) await this.navigateToQuestion(first);
     return true;
@@ -873,7 +858,7 @@ export class PracticeController extends EventTarget {
     const generation = this.#initializeGeneration;
     const ticket = this.ticket(identity);
     const isCurrent = () => ticket.valid({ phase: "NAVIGATING", epoch: "any" });
-    const traversal = indexer.controlledTraversal(this.flushDraft());
+    const traversal = indexer.controlledTraversal();
     this.patch({
       phase: "NAVIGATING",
       indexStatus: "INDEXING",
@@ -887,7 +872,7 @@ export class PracticeController extends EventTarget {
         restored.predictionEdition !== identity.predictionEdition ||
         restored.total !== identity.total
       ) {
-        void this.initialize(this.flushDraft().catch(() => undefined));
+        void this.initialize();
         return;
       }
       const failureReason = indexer.failureReason;
@@ -952,26 +937,6 @@ export class PracticeController extends EventTarget {
     });
   }
 
-  async flushDraft(): Promise<void> {
-    const identity = this.#state.identity;
-    if (!identity) return;
-    if (!canPersistPredictionEdition(identity.predictionEdition)) {
-      this.#sessionDrafts.set(
-        sessionQuestionKey(identity),
-        this.#draftProvider(),
-      );
-      return;
-    }
-    this.#draftRevision += 1;
-    await this.#runtime.saveDraft({
-      predictionEdition: identity.predictionEdition,
-      questionId: identity.questionId,
-      text: this.#draftProvider(),
-      revision: this.#draftRevision,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
   dispose(): void {
     this.#disposed = true;
     this.#initializeGeneration += 1;
@@ -1028,9 +993,6 @@ export class PracticeController extends EventTarget {
     const generation = this.#initializeGeneration;
     const sessionKey = sessionQuestionKey(identity);
     const sessionMarked = this.#sessionMarks.get(sessionKey) ?? false;
-    await this.flushDraft().catch(() => undefined);
-    const sessionDraft = this.#sessionDrafts.get(sessionKey) ?? "";
-    if (!this.isCurrentInitialization(generation)) return;
     await this.teardownActivePorts();
     if (!this.isCurrentInitialization(generation)) return;
 
@@ -1065,24 +1027,11 @@ export class PracticeController extends EventTarget {
         return;
       const checkpoints = new RuntimeIndexCheckpoints(this.#runtime);
       await checkpoints.adoptBootstrap(result);
-      if (sessionDraft) {
-        this.#draftRevision += 1;
-        await this.#runtime
-          .saveDraft({
-            predictionEdition: result.edition,
-            questionId: identity.questionId,
-            text: sessionDraft,
-            revision: this.#draftRevision,
-            updatedAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
       if (sessionMarked) {
         await this.#runtime
           .setMarked(result.edition, identity.questionId, true)
           .catch(() => undefined);
       }
-      this.#sessionDrafts.clear();
       this.#sessionMarks.clear();
       this.#predictionBootstrap = null;
       await bootstrap.dispose();
@@ -1111,13 +1060,13 @@ export class PracticeController extends EventTarget {
           recoveredIdentity &&
           !canPersistPredictionEdition(recoveredIdentity.predictionEdition)
         ) {
-          const recoveredKey = sessionQuestionKey(recoveredIdentity);
-          this.#sessionDrafts.set(recoveredKey, sessionDraft);
-          this.#sessionMarks.set(recoveredKey, sessionMarked);
+          this.#sessionMarks.set(
+            sessionQuestionKey(recoveredIdentity),
+            sessionMarked,
+          );
         }
         this.patch({
           indexStatus: "PARTIAL",
-          draft: sessionDraft,
           marked: sessionMarked,
           notice: `完整验证未完成：${message}；已返回当前页会话`,
         });
@@ -1147,17 +1096,11 @@ export class PracticeController extends EventTarget {
         indexStatus: "IDLE",
         notice: "检测到周预测题目变化，正在重新验证",
       });
-      void this.initialize(this.flushDraft().catch(() => undefined));
+      void this.initialize();
       return;
     }
     if (epoch !== this.#latestNavigationEpoch) return;
-    if (manual && this.#state.identity)
-      await this.flushDraft().catch(() => undefined);
-    if (!this.isCurrentInitialization(generation)) return;
-    const [draft, marked] = await Promise.all([
-      this.safeLoadDraft(identity),
-      this.readMarked(identity),
-    ]);
+    const marked = await this.readMarked(identity);
     if (
       !this.isCurrentInitialization(generation) ||
       epoch !== this.#latestNavigationEpoch
@@ -1194,7 +1137,7 @@ export class PracticeController extends EventTarget {
     this.patch({
       phase: "ANSWERING",
       identity,
-      draft,
+      draft: "",
       marked,
       review: null,
       notice: manual ? "已跟随原网页切题" : "",
@@ -1232,17 +1175,6 @@ export class PracticeController extends EventTarget {
       .then(() => this.#runtime.saveSession(toQuestionRef(identity)));
     this.#sessionWriteChain = write;
     await write;
-  }
-
-  private async safeLoadDraft(identity: QuestionIdentity): Promise<string> {
-    if (!canPersistPredictionEdition(identity.predictionEdition))
-      return this.#sessionDrafts.get(sessionQuestionKey(identity)) ?? "";
-    const checkpoint = await this.#runtime
-      .loadDraft(identity.predictionEdition, identity.questionId)
-      .catch(() => null);
-    if (!checkpoint) return "";
-    this.#draftRevision = Math.max(this.#draftRevision, checkpoint.revision);
-    return checkpoint.text;
   }
 
   private async discoverIndex(): Promise<void> {

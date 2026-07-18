@@ -109,6 +109,16 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await expect(page.getByTestId("ranked-review")).toContainText("错题集");
   await page.getByTestId("wrong-drive-start").click();
   await expect(page.getByTestId("review-queue")).toHaveText("错题循环 1/1");
+  // The drive re-enters the first wrong question as a fresh attempt:
+  // answering phase, empty box. Submit again, then step the queue.
+  await expect(page.getByTestId("practice-state")).toHaveText("ANSWERING");
+  await expect(answer).toHaveValue("");
+  await answer.pressSequentially(
+    "Students should submit their assignments before Friday",
+  );
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
+  await page.waitForTimeout(450);
   await page.keyboard.press("KeyJ");
   await expect(page.getByTestId("review-queue")).toBeHidden();
   await expect(page.getByTestId("question-position")).toHaveText("1/3");
@@ -121,10 +131,12 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
 
   await page.keyboard.press("Alt+KeyK");
   await expect(page.getByTestId("question-position")).toHaveText("1/3");
-  await expect(answer).toHaveValue(
-    "Students should submit their assignments before Friday",
-  );
+  // Re-entering a previously answered question starts clean: no stale text.
+  await expect(answer).toHaveValue("");
 
+  // Hiding and re-showing the overlay keeps the in-progress typing (this is
+  // a same-question round trip, not a question switch).
+  await answer.pressSequentially("half typed");
   await page.keyboard.press("Alt+Shift+KeyP");
   await expect(cockpit).toBeHidden();
   await expect(page.locator("#site-shell")).not.toHaveAttribute("inert", "");
@@ -133,9 +145,7 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   );
   await page.keyboard.press("Alt+Shift+KeyP");
   await expect(cockpit).toBeVisible();
-  await expect(answer).toHaveValue(
-    "Students should submit their assignments before Friday",
-  );
+  await expect(answer).toHaveValue("half typed");
 });
 
 test("restores the verified set and learning data after a reload", async ({

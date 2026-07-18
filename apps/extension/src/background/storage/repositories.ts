@@ -2,8 +2,6 @@ import {
   type AttemptEvent,
   AttemptEventSchema,
   type CandidateFact,
-  type DraftCheckpoint,
-  DraftCheckpointSchema,
   type IndexedQuestion,
   IndexedQuestionSchema,
   type IndexSnapshot,
@@ -51,27 +49,6 @@ export class CockpitRepositories {
     private readonly clock: () => number = Date.now,
   ) {}
 
-  async loadDraft(
-    predictionEdition: string,
-    questionId: string,
-  ): Promise<DraftCheckpoint | null> {
-    return (
-      (await this.db.drafts.get(progressKey(predictionEdition, questionId))) ??
-      null
-    );
-  }
-
-  async saveDraft(input: DraftCheckpoint): Promise<void> {
-    const draft = DraftCheckpointSchema.parse(input);
-    await this.db.transaction("rw", this.db.drafts, async () => {
-      const key = progressKey(draft.predictionEdition, draft.questionId);
-      const current = await this.db.drafts.get(key);
-      if (!current || draft.revision > current.revision) {
-        await this.db.drafts.put(draft);
-      }
-    });
-  }
-
   async saveSession(
     input: QuestionRef,
     updatedAt = new Date(this.clock()).toISOString(),
@@ -84,20 +61,14 @@ export class CockpitRepositories {
 
   async restoreSession(): Promise<RestoredSession> {
     const session = await this.db.sessions.get("current");
-    if (!session) return { question: null, draft: null };
+    if (!session) return { question: null };
     const question = QuestionRefSchema.parse({
       questionId: session.questionId,
       predictionEdition: session.predictionEdition,
       position: session.position,
       total: session.total,
     });
-    return {
-      question,
-      draft: await this.loadDraft(
-        session.predictionEdition,
-        session.questionId,
-      ),
-    };
+    return { question };
   }
 
   async commitAttempt(

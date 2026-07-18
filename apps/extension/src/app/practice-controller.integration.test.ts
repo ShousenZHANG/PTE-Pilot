@@ -276,17 +276,28 @@ describe("practice loop integration", () => {
     });
   });
 
-  it("persists drafts and marks across a reload", async () => {
+  it("opens every question with an empty answer box, even after typing", async () => {
+    await controller.initialize();
+    draft = "half typed answer";
+    await controller.navigate("next");
+    expect(controller.state.draft).toBe("");
+    // Returning to the question that was typed on must not restore the text.
+    await controller.navigate("previous");
+    expect(controller.state.identity).toMatchObject({ questionId: "131001" });
+    expect(controller.state.draft).toBe("");
+  });
+
+  it("persists marks (not drafts) across a reload", async () => {
     await controller.initialize();
     await controller.navigate("next");
     draft = "half typed answer";
-    await controller.flushDraft();
     await controller.toggleMarked();
     expect(controller.state.marked).toBe(true);
     controller.dispose();
 
     // Simulate a reload: the site is back on question 1, a fresh controller
-    // must restore the stored session (question 2) with draft and mark.
+    // must restore the stored session (question 2) with its mark but with a
+    // clean answer box.
     site.jumpTo(1);
     controller = new PracticeController(() => draft, document);
     await controller.initialize();
@@ -294,7 +305,7 @@ describe("practice loop integration", () => {
       questionId: "131002",
       position: 2,
     });
-    expect(controller.state.draft).toBe("half typed answer");
+    expect(controller.state.draft).toBe("");
     expect(controller.state.marked).toBe(true);
   });
 
@@ -322,18 +333,20 @@ describe("practice loop integration", () => {
     expect(controller.state.indexStatus).toBe("COMPLETE");
 
     controller.setCommand(true);
-    // The current question is not in the queue: the drive must jump to the
-    // first wrong question directly.
-    await controller.startWrongDrive(["131003", "131002"]);
+    // The drive always restarts from the first queued question — even though
+    // the current question (131001) is in the queue — with a clean box.
+    draft = "leftover text";
+    await controller.startWrongDrive(["131003", "131001"]);
     await waitFor(() => controller.state.phase === "ANSWERING");
     expect(controller.state.identity).toMatchObject({
       questionId: "131003",
       position: 3,
     });
+    expect(controller.state.draft).toBe("");
     expect(controller.state.reviewQueue).toEqual({ position: 1, total: 2 });
 
     await controller.navigate("next");
-    expect(controller.state.identity).toMatchObject({ questionId: "131002" });
+    expect(controller.state.identity).toMatchObject({ questionId: "131001" });
     expect(controller.state.reviewQueue).toEqual({ position: 2, total: 2 });
 
     // Stepping past the last queued question finishes the round.

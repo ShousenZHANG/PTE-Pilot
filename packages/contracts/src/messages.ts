@@ -12,17 +12,6 @@ import {
   QuestionRefSchema,
 } from "./site";
 
-export const DraftCheckpointSchema = z
-  .object({
-    predictionEdition: PredictionEditionSchema,
-    questionId: QuestionIdSchema,
-    text: z.string().max(20_000),
-    revision: z.number().int().nonnegative(),
-    updatedAt: z.string().datetime(),
-  })
-  .strict();
-export type DraftCheckpoint = z.infer<typeof DraftCheckpointSchema>;
-
 export const CandidateFactSchema = z
   .object({
     questionId: QuestionIdSchema,
@@ -39,7 +28,6 @@ export type CandidateFact = z.infer<typeof CandidateFactSchema>;
 export const RestoredSessionSchema = z
   .object({
     question: QuestionRefSchema.nullable(),
-    draft: DraftCheckpointSchema.nullable(),
   })
   .strict();
 export type RestoredSession = z.infer<typeof RestoredSessionSchema>;
@@ -89,15 +77,6 @@ const request = <T extends z.ZodRawShape>(shape: T) =>
   z.object({ requestId: RequestIdSchema, ...shape }).strict();
 
 export const RuntimeRequestSchema = z.discriminatedUnion("action", [
-  request({
-    action: z.literal("storage/loadDraft"),
-    predictionEdition: PredictionEditionSchema,
-    questionId: QuestionIdSchema,
-  }),
-  request({
-    action: z.literal("storage/saveDraft"),
-    draft: DraftCheckpointSchema,
-  }),
   request({
     action: z.literal("storage/commitAttempt"),
     predictionEdition: PredictionEditionSchema,
@@ -152,11 +131,6 @@ const success = <T extends z.ZodRawShape>(shape: T) =>
     .strict();
 
 export const RuntimeSuccessSchema = z.discriminatedUnion("action", [
-  success({
-    action: z.literal("storage/loadDraft"),
-    draft: DraftCheckpointSchema.nullable(),
-  }),
-  success({ action: z.literal("storage/saveDraft") }),
   success({ action: z.literal("storage/commitAttempt") }),
   success({ action: z.literal("storage/setMarked") }),
   success({

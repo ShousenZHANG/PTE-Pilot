@@ -68,7 +68,6 @@ export function Cockpit(): React.JSX.Element | null {
   const commandSessionRef = useRef(new CommandSessionGate());
   const panelRef = useRef<Panel>("none");
   const openRef = useRef(true);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewReadyAtRef = useRef(0);
   const enterReleasedRef = useRef(true);
   const previousPhaseRef = useRef(INITIAL_STATE.phase);
@@ -149,7 +148,6 @@ export function Cockpit(): React.JSX.Element | null {
           controllerRef.current.pauseIndex();
         liveDraftRef.current =
           textareaRef.current?.value ?? liveDraftRef.current;
-        void controllerRef.current?.flushDraft().catch(() => undefined);
       } else if (controllerRef.current?.state.phase === "COMMAND") {
         commandSessionRef.current.open();
       }
@@ -301,8 +299,6 @@ export function Cockpit(): React.JSX.Element | null {
     void controller.initialize();
     return () => {
       commandSessionRef.current.invalidate();
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      void controller.flushDraft().catch(() => undefined);
       controller.removeEventListener("statechange", onState);
       controller.dispose();
       controllerRef.current = null;
@@ -567,13 +563,7 @@ export function Cockpit(): React.JSX.Element | null {
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
               updateWordCount(event.currentTarget, wordCountRef.current);
-              if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-              saveTimerRef.current = setTimeout(
-                () => void controllerRef.current?.flushDraft(),
-                120,
-              );
             }}
-            onBlur={() => void controllerRef.current?.flushDraft()}
           />
           <span className="answer-foot">
             <output ref={wordCountRef}>Total Word Count: 0</output>

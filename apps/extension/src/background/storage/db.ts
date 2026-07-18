@@ -1,6 +1,5 @@
 import type {
   AttemptEvent,
-  DraftCheckpoint,
   IndexedQuestion,
   IndexSnapshot,
   UserSettings,
@@ -48,7 +47,6 @@ export interface MetaRecord {
 }
 
 export class PtePilotDb extends Dexie {
-  drafts!: Table<DraftCheckpoint, readonly [string, string]>;
   attempts!: Table<AttemptEvent, string>;
   wordStats!: Table<WordStatRecord, string>;
   questionProgress!: Table<QuestionProgressRecord, readonly [string, string]>;
@@ -92,6 +90,9 @@ export class PtePilotDb extends Dexie {
         .filter((record) => !isTrainableWord(record.expected))
         .delete(),
     );
+    // Drafts are no longer restored: every question entry starts with an
+    // empty answer box, so the store (and its stale text) goes away.
+    this.version(4).stores({ drafts: null });
   }
 }
 
