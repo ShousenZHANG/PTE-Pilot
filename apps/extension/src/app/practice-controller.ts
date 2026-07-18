@@ -36,6 +36,7 @@ import { rankLocally } from "../learning/ranking";
 import { queuePosition, stepQueue } from "../learning/review-queue";
 import { RuntimeClient } from "../runtime/runtime-client";
 import { DEFAULT_ALT_KEYMAP, isValidKeymap } from "./keyboard";
+import { OperationTicket } from "./operation-guard";
 
 export interface RankedReviewEntry {
   questionId: string;
@@ -713,35 +714,7 @@ export class PracticeController extends EventTarget {
   }
 
   async play(): Promise<void> {
-    const audio = this.#audio;
-    const identity = this.#state.identity;
-    const epoch = this.#latestNavigationEpoch;
-    const generation = this.#initializeGeneration;
-    if (!audio || !identity || this.#audioCommandPending) return;
-    this.#audioCommandPending = true;
-    try {
-      await audio.play();
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
-        return;
-      this.#replayCount += 1;
-      this.patch({ notice: "" });
-    } catch (error) {
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
-        return;
-      const message = safeError(error);
-      if (message === "audio:needs-gesture") {
-        this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
-        return;
-      }
-      if (message === "audio:not-ready") {
-        this.patch({ notice: "音频尚未就绪；稍候一秒再按 Alt+P" });
-        return;
-      }
-      this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
-    } finally {
-      this.#audioCommandPending = false;
-      this.flushQueuedRestart();
-    }
+    await this.runAudioCommand((audio) => audio.play());
   }
 
   audioSnapshot(): AudioSnapshot | null {
@@ -764,56 +737,54 @@ export class PracticeController extends EventTarget {
    * keeps the strict error surface.
    */
   async autoPlayAudio(): Promise<void> {
-    const audio = this.#audio;
-    const identity = this.#state.identity;
-    const epoch = this.#latestNavigationEpoch;
-    const generation = this.#initializeGeneration;
-    if (!audio || !identity || this.#audioCommandPending) return;
-    this.#audioCommandPending = true;
-    try {
-      await audio.play();
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
-        return;
-      this.#replayCount += 1;
-      this.patch({ notice: "" });
-    } catch {
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
-        return;
-      this.patch({
-        audioStatus:
-          this.#state.audioStatus === "AUDIO_ERROR"
-            ? "READY"
-            : this.#state.audioStatus,
-        notice: "自动播放未成功；按 Alt+P 或点击底部播放",
-      });
-    } finally {
-      this.#audioCommandPending = false;
-      this.flushQueuedRestart();
-    }
+    await this.runAudioCommand((audio) => audio.play(), {
+      onFailure: () => {
+        this.patch({
+          audioStatus:
+            this.#state.audioStatus === "AUDIO_ERROR"
+              ? "READY"
+              : this.#state.audioStatus,
+          notice: "自动播放未成功；按 Alt+P 或点击底部播放",
+        });
+      },
+    });
   }
 
   async restartAudio(): Promise<void> {
-    const audio = this.#audio;
-    const identity = this.#state.identity;
-    const epoch = this.#latestNavigationEpoch;
-    const generation = this.#initializeGeneration;
-    if (!audio || !identity) return;
-    if (this.#audioCommandPending) {
+    await this.runAudioCommand((audio) => audio.restart(), {
       // A replay pressed while countdown autoplay is in flight must not be
       // dropped; it runs the moment the current operation settles.
-      this.#queuedRestart = true;
+      queueWhenPending: true,
+    });
+  }
+
+  private async runAudioCommand(
+    command: (audio: AudioBroker) => Promise<void>,
+    options: {
+      queueWhenPending?: boolean;
+      onFailure?: (error: unknown) => void;
+    } = {},
+  ): Promise<void> {
+    const audio = this.#audio;
+    const identity = this.#state.identity;
+    if (!audio || !identity) return;
+    if (this.#audioCommandPending) {
+      if (options.queueWhenPending) this.#queuedRestart = true;
       return;
     }
+    const ticket = this.ticket(identity);
     this.#audioCommandPending = true;
     try {
-      await audio.restart();
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
-        return;
+      await command(audio);
+      if (!ticket.valid({ site: true })) return;
       this.#replayCount += 1;
       this.patch({ notice: "" });
     } catch (error) {
-      if (!this.isCurrentAudioOperation(audio, identity, epoch, generation))
+      if (!ticket.valid({ site: true })) return;
+      if (options.onFailure) {
+        options.onFailure(error);
         return;
+      }
       const message = safeError(error);
       if (message === "audio:needs-gesture") {
         this.patch({ notice: "浏览器拦截了自动播放；按 Alt+P 或点击播放" });
@@ -1451,16 +1422,23 @@ export class PracticeController extends EventTarget {
     return !this.#disposed && generation === this.#initializeGeneration;
   }
 
-  private isCurrentAudioOperation(
-    audio: AudioBroker,
-    identity: QuestionIdentity,
-    epoch: number,
-    generation: number,
-  ): boolean {
-    return (
-      this.#audio === audio &&
-      this.isCurrentInitialization(generation) &&
-      this.isCurrentQuestion(identity, epoch)
+  private ticket(identity: QuestionIdentity): OperationTicket {
+    return new OperationTicket(
+      {
+        disposed: () => this.#disposed,
+        generation: () => this.#initializeGeneration,
+        epoch: () => this.#latestNavigationEpoch,
+        phase: () => this.#state.phase,
+        stateIdentity: () => this.#state.identity,
+        siteIdentity: () => {
+          try {
+            return this.#site.readIdentity();
+          } catch {
+            return null;
+          }
+        },
+      },
+      identity,
     );
   }
 
