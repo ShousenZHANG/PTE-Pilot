@@ -1,16 +1,12 @@
 import type {
   AttemptEvent,
   IndexedQuestion as ContractIndexedQuestion,
-  IndexSnapshot as ContractIndexSnapshot,
   QuestionRef,
   RuntimeFault,
   UserSettings,
   WordStatSummary,
 } from "@pte-pilot/contracts";
 import type {
-  AdapterDiagnostic,
-  IndexedQuestion,
-  IndexSnapshot,
   PracticeMode,
   PracticePhase,
   ProbeResult,
@@ -19,24 +15,46 @@ import type {
 } from "../domain/types";
 import { AnswerGate } from "../firefly/answer-gate";
 import { AudioBroker, type AudioSnapshot } from "../firefly/audio-broker";
-import {
-  FireflyDomAdapter,
-  isVerifiedQuestionSetEdition,
-} from "../firefly/dom-adapter";
+import { FireflyDomAdapter } from "../firefly/dom-adapter";
 import { NavigationCoordinator } from "../firefly/navigation-coordinator";
-import {
-  PredictionEditionBootstrap,
-  type PredictionEditionBootstrapResult,
-} from "../firefly/prediction-edition-bootstrap";
-import {
-  type IndexCheckpointPort,
-  QuestionIndexer,
-} from "../firefly/question-indexer";
+import { PredictionEditionBootstrap } from "../firefly/prediction-edition-bootstrap";
+import { QuestionIndexer } from "../firefly/question-indexer";
 import { rankLocally } from "../learning/ranking";
 import { queuePosition, stepQueue } from "../learning/review-queue";
 import { RuntimeClient } from "../runtime/runtime-client";
+import {
+  canNavigateFromPhase,
+  canPersistPredictionEdition,
+  defaultSettings,
+  diagnosticFault,
+  mergeSettings,
+  predictionEditionStartupMode,
+  runGuardedControllerOperation,
+  safeError,
+  sessionQuestionKey,
+  shouldRetryProbe,
+  toQuestionRef,
+} from "./controller-support";
+import {
+  type ControllerIndexCheckpoints,
+  RuntimeIndexCheckpoints,
+  SessionIndexCheckpoints,
+} from "./index-checkpoints";
 import { DEFAULT_ALT_KEYMAP, isValidKeymap } from "./keyboard";
-import { OperationTicket } from "./operation-guard";
+import { OperationTicket, sameQuestionIdentity } from "./operation-guard";
+
+export {
+  canNavigateFromPhase,
+  canPersistPredictionEdition,
+  type PredictionEditionStartupMode,
+  predictionEditionStartupMode,
+  runGuardedControllerOperation,
+  shouldRetryProbe,
+} from "./controller-support";
+export {
+  RuntimeIndexCheckpoints,
+  SessionIndexCheckpoints,
+} from "./index-checkpoints";
 
 export interface RankedReviewEntry {
   questionId: string;
@@ -62,69 +80,6 @@ export interface CockpitViewState {
   reviewQueue: { position: number; total: number } | null;
   keymap: Record<string, string>;
   fault: RuntimeFault | null;
-}
-
-const NAVIGABLE_PHASES = new Set<PracticePhase>([
-  "ANSWERING",
-  "REVIEW",
-  "COMMAND",
-  "DESYNC",
-]);
-
-export function canNavigateFromPhase(phase: PracticePhase): boolean {
-  return NAVIGABLE_PHASES.has(phase);
-}
-
-export async function runGuardedControllerOperation(options: {
-  run: () => Promise<void>;
-  isCurrent: () => boolean;
-  onSuccess: () => void;
-  onError: (error: unknown) => void;
-}): Promise<void> {
-  try {
-    await options.run();
-    if (options.isCurrent()) options.onSuccess();
-  } catch (error) {
-    if (options.isCurrent()) options.onError(error);
-  }
-}
-
-export type PredictionEditionStartupMode = "verified" | "session" | "reject";
-
-export function predictionEditionStartupMode(
-  probe: ProbeResult,
-): PredictionEditionStartupMode {
-  if (probe.ok) return "verified";
-  return probe.diagnostic.detail === "question:prediction-edition-unverified"
-    ? "session"
-    : "reject";
-}
-
-/*
- * The Firefly page re-renders in bursts (question switch, dialog close,
- * skeleton load). A missing or ambiguous control in that window is transient,
- * not a site change, so the initial probe deserves a short grace period
- * before failing closed. Auth failures and unverified editions are
- * deterministic and never retried.
- */
-export function shouldRetryProbe(diagnostic: AdapterDiagnostic): boolean {
-  return (
-    diagnostic.code !== "AUTH_REQUIRED" &&
-    diagnostic.detail !== "question:prediction-edition-unverified" &&
-    /:(?:missing|ambiguous)$/u.test(diagnostic.detail)
-  );
-}
-
-export function canPersistPredictionEdition(edition: string): boolean {
-  return !["session:", "provisional:"].some((prefix) =>
-    edition.startsWith(prefix),
-  );
-}
-
-interface ControllerIndexCheckpoints extends IndexCheckpointPort {
-  readonly snapshot: IndexSnapshot | null;
-  isCompleteFor(identity: QuestionIdentity): boolean;
-  hasCompleteEdition(predictionEdition: string, total: number): boolean;
 }
 
 export class PracticeController extends EventTarget {
@@ -1366,7 +1321,7 @@ export class PracticeController extends EventTarget {
 
   private isSiteAt(identity: QuestionIdentity): boolean {
     try {
-      return sameIdentity(this.#site.readIdentity(), identity);
+      return sameQuestionIdentity(this.#site.readIdentity(), identity);
     } catch {
       return false;
     }
@@ -1379,7 +1334,7 @@ export class PracticeController extends EventTarget {
     return (
       !this.#disposed &&
       epoch === this.#latestNavigationEpoch &&
-      sameIdentity(this.#state.identity, identity) &&
+      sameQuestionIdentity(this.#state.identity, identity) &&
       this.isSiteAt(identity)
     );
   }
@@ -1412,277 +1367,4 @@ export class PracticeController extends EventTarget {
     this.#state = { ...this.#state, ...change };
     this.dispatchEvent(new CustomEvent("statechange", { detail: this.#state }));
   }
-}
-
-export class SessionIndexCheckpoints implements ControllerIndexCheckpoints {
-  readonly #questions = new Map<number, IndexedQuestion>();
-  #snapshot: IndexSnapshot | null = null;
-
-  get snapshot(): IndexSnapshot | null {
-    return this.#snapshot;
-  }
-
-  resumeSnapshot(): IndexSnapshot | null {
-    return this.#snapshot;
-  }
-
-  resumeQuestions(): IndexedQuestion[] {
-    return [...this.#questions.values()].sort(
-      (left, right) => left.sitePosition - right.sitePosition,
-    );
-  }
-
-  isCompleteFor(identity: QuestionIdentity): boolean {
-    return (
-      this.hasCompleteEdition(identity.predictionEdition, identity.total) &&
-      this.#questions.get(identity.position)?.questionId === identity.questionId
-    );
-  }
-
-  hasCompleteEdition(predictionEdition: string, total: number): boolean {
-    return (
-      this.#snapshot?.completeness === "complete" &&
-      this.#snapshot.predictionEdition === predictionEdition &&
-      this.#snapshot.siteTotal === total
-    );
-  }
-
-  async saveQuestion(question: IndexedQuestion): Promise<void> {
-    this.#questions.set(question.sitePosition, question);
-  }
-
-  async saveSnapshot(snapshot: IndexSnapshot): Promise<void> {
-    const questions = this.resumeQuestions().filter(
-      (question) =>
-        question.predictionEdition === snapshot.predictionEdition &&
-        question.siteTotal === snapshot.siteTotal,
-    );
-    const complete =
-      snapshot.completeness === "complete" &&
-      questions.length === snapshot.siteTotal &&
-      questions.every((question, index) => question.sitePosition === index + 1);
-    this.#snapshot = {
-      ...snapshot,
-      orderedQuestionIds: questions.map((question) => question.questionId),
-      completeness: complete ? "complete" : "partial",
-    };
-  }
-}
-
-export class RuntimeIndexCheckpoints implements ControllerIndexCheckpoints {
-  readonly #runtime: RuntimeClient;
-  readonly #questions = new Map<string, IndexedQuestion>();
-  #snapshot: IndexSnapshot | null = null;
-
-  constructor(runtime: RuntimeClient) {
-    this.#runtime = runtime;
-  }
-
-  get snapshot(): IndexSnapshot | null {
-    return this.#snapshot;
-  }
-
-  resumeSnapshot(): IndexSnapshot | null {
-    return this.#snapshot;
-  }
-
-  resumeQuestions(): IndexedQuestion[] {
-    if (!this.#snapshot) return [];
-    return [...this.#questions.values()].filter(
-      (question) =>
-        question.predictionEdition === this.#snapshot?.predictionEdition &&
-        question.siteTotal === this.#snapshot.siteTotal,
-    );
-  }
-
-  isCompleteFor(identity: QuestionIdentity): boolean {
-    if (
-      this.#snapshot?.completeness !== "complete" ||
-      this.#snapshot.predictionEdition !== identity.predictionEdition ||
-      this.#snapshot.siteTotal !== identity.total
-    )
-      return false;
-    const atPosition = [...this.#questions.values()].find(
-      (question) =>
-        question.predictionEdition === identity.predictionEdition &&
-        question.sitePosition === identity.position,
-    );
-    return atPosition?.questionId === identity.questionId;
-  }
-
-  hasCompleteEdition(predictionEdition: string, total: number): boolean {
-    return (
-      this.#snapshot?.completeness === "complete" &&
-      this.#snapshot.predictionEdition === predictionEdition &&
-      this.#snapshot.siteTotal === total
-    );
-  }
-
-  async adoptBootstrap(
-    result: PredictionEditionBootstrapResult,
-  ): Promise<void> {
-    if (
-      !isVerifiedQuestionSetEdition(
-        result.edition,
-        result.snapshot.siteTotal,
-      ) ||
-      result.snapshot.predictionEdition !== result.edition ||
-      result.snapshot.completeness !== "complete" ||
-      result.questions.length !== result.snapshot.siteTotal ||
-      result.questions.some(
-        (question, index) =>
-          question.predictionEdition !== result.edition ||
-          question.siteTotal !== result.snapshot.siteTotal ||
-          question.sitePosition !== index + 1 ||
-          question.questionId !== result.snapshot.orderedQuestionIds[index],
-      )
-    ) {
-      throw new Error("index:invalid-bootstrap-result");
-    }
-    this.#questions.clear();
-    this.#snapshot = null;
-    for (const question of result.questions) {
-      this.#questions.set(
-        `${question.predictionEdition}:${question.questionId}`,
-        question,
-      );
-    }
-    await this.saveSnapshot(result.snapshot);
-  }
-
-  async hydrate(predictionEdition: string): Promise<void> {
-    const { snapshot, questions } = await this.#runtime
-      .loadIndexSnapshot(predictionEdition)
-      .catch(() => ({
-        snapshot: null,
-        questions: [],
-      }));
-    this.#snapshot = snapshot as IndexSnapshot | null;
-    for (const question of questions) {
-      this.#questions.set(
-        `${question.predictionEdition}:${question.questionId}`,
-        question,
-      );
-    }
-  }
-
-  async saveQuestion(question: IndexedQuestion): Promise<void> {
-    for (const [key, existing] of this.#questions) {
-      if (
-        existing.predictionEdition === question.predictionEdition &&
-        existing.sitePosition === question.sitePosition &&
-        existing.questionId !== question.questionId
-      )
-        this.#questions.delete(key);
-    }
-    this.#questions.set(
-      `${question.predictionEdition}:${question.questionId}`,
-      question,
-    );
-  }
-
-  async saveSnapshot(snapshot: IndexSnapshot): Promise<void> {
-    const previous = this.#snapshot;
-    const preserveComplete =
-      snapshot.completeness === "partial" &&
-      previous?.completeness === "complete" &&
-      previous.predictionEdition === snapshot.predictionEdition &&
-      previous.siteTotal === snapshot.siteTotal &&
-      previous.orderedQuestionIds.every((questionId, index) =>
-        [...this.#questions.values()].some(
-          (question) =>
-            question.predictionEdition === snapshot.predictionEdition &&
-            question.questionId === questionId &&
-            question.sitePosition === index + 1,
-        ),
-      );
-    const targetSnapshot = preserveComplete ? previous : snapshot;
-    const completeIds =
-      targetSnapshot.completeness === "complete"
-        ? new Set(targetSnapshot.orderedQuestionIds)
-        : null;
-    const questions = [...this.#questions.values()]
-      .filter(
-        (question) =>
-          question.predictionEdition === targetSnapshot.predictionEdition &&
-          (!completeIds || completeIds.has(question.questionId)),
-      )
-      .sort((left, right) => left.sitePosition - right.sitePosition);
-    const complete =
-      targetSnapshot.completeness === "complete" &&
-      questions.length === targetSnapshot.siteTotal &&
-      questions.every((question, index) => question.sitePosition === index + 1);
-    const merged: IndexSnapshot = {
-      ...targetSnapshot,
-      orderedQuestionIds: questions.map((question) => question.questionId),
-      completeness: complete ? "complete" : "partial",
-    };
-    this.#snapshot = merged;
-    await this.#runtime.saveIndexSnapshot(
-      merged as ContractIndexSnapshot,
-      questions as ContractIndexedQuestion[],
-    );
-  }
-}
-
-function sameIdentity(
-  left: QuestionIdentity | null,
-  right: QuestionIdentity,
-): boolean {
-  return (
-    left?.predictionEdition === right.predictionEdition &&
-    left.questionId === right.questionId &&
-    left.position === right.position &&
-    left.total === right.total
-  );
-}
-
-function sessionQuestionKey(identity: QuestionIdentity): string {
-  return `${identity.predictionEdition}:${identity.questionId}`;
-}
-
-function defaultSettings(): UserSettings {
-  return {
-    id: "current",
-    mode: "practice",
-    audioStrategy: "site-player-only",
-    keymap: { ...DEFAULT_ALT_KEYMAP },
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function mergeSettings(settings: UserSettings): UserSettings {
-  return { ...settings, keymap: { ...DEFAULT_ALT_KEYMAP, ...settings.keymap } };
-}
-
-function toQuestionRef(identity: QuestionIdentity): {
-  predictionEdition: string;
-  questionId: string;
-  position: number;
-  total: number;
-} {
-  return {
-    predictionEdition: identity.predictionEdition,
-    questionId: identity.questionId,
-    position: identity.position,
-    total: identity.total,
-  };
-}
-
-function diagnosticFault(code: string, message: string): RuntimeFault {
-  const mapped = new Set([
-    "AUTH_REQUIRED",
-    "SITE_CHANGED",
-    "DESYNC",
-    "AUDIO_ERROR",
-    "INDEX_PARTIAL",
-    "STORAGE_ERROR",
-  ]).has(code)
-    ? (code as RuntimeFault["code"])
-    : "SITE_CHANGED";
-  return { code: mapped, message, recoverable: true };
-}
-
-function safeError(error: unknown): string {
-  return error instanceof Error ? error.message : "未知错误";
 }

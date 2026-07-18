@@ -63,12 +63,10 @@ export class OperationTicket {
     if ((check.generation ?? true) && host.generation() !== this.#generation)
       return false;
     const expectedEpoch = check.epoch ?? this.#epoch;
-    if (expectedEpoch !== "any" && host.epoch() !== expectedEpoch)
-      return false;
+    if (expectedEpoch !== "any" && host.epoch() !== expectedEpoch) return false;
     if (!sameQuestionIdentity(host.stateIdentity(), this.#identity))
       return false;
-    if (check.phase !== undefined && host.phase() !== check.phase)
-      return false;
+    if (check.phase !== undefined && host.phase() !== check.phase) return false;
     if (check.site) {
       const expected = check.site === true ? this.#identity : check.site;
       const site = host.siteIdentity();
