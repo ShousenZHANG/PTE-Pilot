@@ -8,6 +8,11 @@ import type {
 } from "../domain/types";
 import type { RevealedAnswerProof } from "./answer-gate";
 import {
+  type BridgeAudioState,
+  type BridgeCommand,
+  MainWorldAudioBridge,
+} from "./audio-bridge";
+import {
   type ControlName,
   matchesControlLabel,
   normalizeLabel,
@@ -199,6 +204,7 @@ type FireflyScoreAnswerState = {
 export class FireflyDomAdapter {
   readonly #document: Document;
   readonly #predictionEditionOverride = new PredictionEditionOverrideState();
+  readonly #audioBridge = new MainWorldAudioBridge();
   /*
    * Fingerprints of answers this session has already read, keyed to the
    * question that owns them. Lets a same-question resubmission be accepted
@@ -682,6 +688,22 @@ export class FireflyDomAdapter {
    * the explicit id attributes are consulted — no full-page position scan —
    * and ambiguity degrades to null instead of throwing.
    */
+  audioBridgeAvailable(): boolean {
+    return this.#audioBridge.available();
+  }
+
+  audioBridgeState(): BridgeAudioState | null {
+    return this.#audioBridge.state();
+  }
+
+  audioBridgeCommand(op: BridgeCommand): void {
+    this.#audioBridge.command(op);
+  }
+
+  onAudioBridgeState(listener: (state: BridgeAudioState) => void): () => void {
+    return this.#audioBridge.onState(listener);
+  }
+
   readQuestionIdFast(): string | null {
     const ids = Array.from(
       this.#document.querySelectorAll<HTMLElement>(

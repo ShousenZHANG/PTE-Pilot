@@ -266,6 +266,52 @@ describe("AudioBroker direct element control", () => {
     expect(broker.state).toBe("PLAYING");
   });
 
+  it("drives playback through the MAIN-world bridge when no element exists", async () => {
+    const commands: string[] = [];
+    let bridgeState = {
+      currentTime: 0,
+      duration: 6,
+      paused: true,
+      ended: false,
+      readyState: 4,
+      at: 0,
+    };
+    let push: ((state: typeof bridgeState) => void) | undefined;
+    const broker = new AudioBroker(
+      siteFixture({
+        audioBridgeAvailable: () => true,
+        audioBridgeState: () => bridgeState,
+        audioBridgeCommand: (op) => {
+          commands.push(op);
+        },
+        onAudioBridgeState: (listener) => {
+          push = listener;
+          return () => {
+            push = undefined;
+          };
+        },
+      }),
+    );
+    broker.bind(identity.questionId, 1);
+    expect(commands).toContain("stop");
+
+    broker.prewarm();
+    expect(commands).toContain("prewarm");
+
+    await broker.play();
+    expect(commands).toContain("play");
+    expect(broker.state).toBe("PLAYING");
+
+    bridgeState = { ...bridgeState, paused: false, currentTime: 2 };
+    push?.({ ...bridgeState, paused: true, ended: true, at: 1 });
+    expect(broker.state).toBe("ENDED");
+
+    await broker.restart();
+    expect(commands).toContain("restart");
+    expect(broker.state).toBe("PLAYING");
+    expect(broker.snapshot()).toMatchObject({ duration: 6 });
+  });
+
   it("stops playback and detaches on invalidate", async () => {
     const element = new FakeAudioElement();
     const broker = new AudioBroker(

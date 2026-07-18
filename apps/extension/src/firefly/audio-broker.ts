@@ -1,10 +1,15 @@
 import type { PracticeMode } from "../domain/types";
+import type { BridgeAudioState, BridgeCommand } from "./audio-bridge";
 
 export interface AudioSitePort {
   readQuestionIdFast(): string | null;
   siteAudioElements(): HTMLAudioElement[];
   playAudio(): void;
   pauseAudio(): void;
+  audioBridgeAvailable?(): boolean;
+  audioBridgeState?(): BridgeAudioState | null;
+  audioBridgeCommand?(op: BridgeCommand): void;
+  onAudioBridgeState?(listener: (state: BridgeAudioState) => void): () => void;
 }
 
 export interface AudioSnapshot {
@@ -39,6 +44,7 @@ export class AudioBroker extends EventTarget {
   #examStartConsumed = false;
   #element: HTMLAudioElement | null = null;
   #detachElement: (() => void) | null = null;
+  #detachBridge: (() => void) | null = null;
 
   constructor(site: AudioSitePort) {
     super();
@@ -51,11 +57,42 @@ export class AudioBroker extends EventTarget {
 
   bind(questionId: string, navigationEpoch: number): void {
     this.releaseElement();
+    this.#detachBridge?.();
+    this.#detachBridge = null;
     this.stopSiteAudio();
     this.#binding = { questionId, navigationEpoch };
     this.#examStartConsumed = false;
     this.setState("EMPTY");
+    const binding = this.#binding;
+    this.#detachBridge =
+      this.#site.onAudioBridgeState?.((state) => {
+        if (this.#binding !== binding || this.#element) return;
+        this.applyBridgeState(state);
+      }) ?? null;
     this.warmUp();
+  }
+
+  /*
+   * State mirroring for the MAIN-world bridge path, where no element is
+   * reachable and truth arrives as posted snapshots.
+   */
+  private applyBridgeState(state: BridgeAudioState): void {
+    if (state.ended) {
+      if (this.#state !== "EMPTY") this.setState("ENDED");
+      return;
+    }
+    if (!state.paused) {
+      this.setState(
+        state.readyState < HAVE_FUTURE_DATA ? "BUFFERING" : "PLAYING",
+      );
+      return;
+    }
+    if (this.#state === "PLAYING" || this.#state === "BUFFERING")
+      this.setState("PAUSED");
+  }
+
+  private bridgeUsable(): boolean {
+    return this.#site.audioBridgeAvailable?.() ?? false;
   }
 
   /*
@@ -81,16 +118,30 @@ export class AudioBroker extends EventTarget {
    */
   prewarm(): void {
     this.warmUp();
+    if (!this.#element) {
+      this.#site.audioBridgeCommand?.("prewarm");
+      this.#site.audioBridgeCommand?.("query");
+    }
   }
 
   snapshot(): AudioSnapshot | null {
     const element = this.#element;
-    if (!element || !Number.isFinite(element.duration)) return null;
-    return {
-      currentTime: element.currentTime,
-      duration: element.duration,
-      playing: !element.paused && !element.ended,
-    };
+    if (element && Number.isFinite(element.duration)) {
+      return {
+        currentTime: element.currentTime,
+        duration: element.duration,
+        playing: !element.paused && !element.ended,
+      };
+    }
+    const bridged = this.#site.audioBridgeState?.();
+    if (bridged && bridged.duration > 0) {
+      return {
+        currentTime: bridged.currentTime,
+        duration: bridged.duration,
+        playing: !bridged.paused && !bridged.ended,
+      };
+    }
+    return null;
   }
 
   async play(): Promise<void> {
@@ -110,6 +161,23 @@ export class AudioBroker extends EventTarget {
         this.assertCurrent(binding);
         if (this.#mode === "exam") this.#examStartConsumed = true;
         this.setState("PLAYING");
+        return;
+      }
+      if (this.bridgeUsable()) {
+        const bridged = this.#site.audioBridgeState?.();
+        if (bridged && !bridged.paused && !bridged.ended) {
+          this.#site.audioBridgeCommand?.("pause");
+          this.setState("PAUSED");
+          return;
+        }
+        this.assertExamPlayAvailable();
+        this.#site.audioBridgeCommand?.("play");
+        if (this.#mode === "exam") this.#examStartConsumed = true;
+        this.setState(
+          bridged && bridged.readyState >= HAVE_FUTURE_DATA
+            ? "PLAYING"
+            : "BUFFERING",
+        );
         return;
       }
       if (this.#state === "PLAYING") {
@@ -146,6 +214,17 @@ export class AudioBroker extends EventTarget {
         this.assertCurrent(binding);
         if (this.#mode === "exam") this.#examStartConsumed = true;
         this.setState("PLAYING");
+        return;
+      }
+      if (this.bridgeUsable()) {
+        this.#site.audioBridgeCommand?.("restart");
+        if (this.#mode === "exam") this.#examStartConsumed = true;
+        const bridged = this.#site.audioBridgeState?.();
+        this.setState(
+          bridged && bridged.readyState >= HAVE_FUTURE_DATA
+            ? "PLAYING"
+            : "BUFFERING",
+        );
         return;
       }
       this.#site.playAudio();
@@ -196,6 +275,8 @@ export class AudioBroker extends EventTarget {
     const element = this.adoptElement();
     if (element) {
       if (!element.paused) element.pause();
+    } else if (this.bridgeUsable()) {
+      this.#site.audioBridgeCommand?.("pause");
     } else {
       this.#site.pauseAudio();
     }
@@ -208,6 +289,8 @@ export class AudioBroker extends EventTarget {
 
   invalidate(): void {
     this.releaseElement();
+    this.#detachBridge?.();
+    this.#detachBridge = null;
     this.stopSiteAudio();
     this.#binding = null;
     this.setState("EMPTY");
@@ -304,6 +387,7 @@ export class AudioBroker extends EventTarget {
   }
 
   private stopSiteAudio(): void {
+    this.#site.audioBridgeCommand?.("stop");
     for (const audio of this.#site.siteAudioElements()) {
       audio.pause();
       try {

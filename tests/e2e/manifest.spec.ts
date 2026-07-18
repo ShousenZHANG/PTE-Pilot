@@ -28,7 +28,11 @@ test("built manifest keeps the approved least-privilege boundary", async () => {
     ]),
   );
   expect(manifest.host_permissions ?? []).not.toContain("<all_urls>");
-  expect(
-    manifest.content_scripts?.flatMap(({ matches }) => matches ?? []),
-  ).toEqual(["https://www.fireflyau.com/ptehome/exercise*"]);
+  const scripts = manifest.content_scripts ?? [];
+  expect(scripts).toHaveLength(2);
+  for (const script of scripts) {
+    expect(script.matches).toEqual([
+      "https://www.fireflyau.com/ptehome/exercise*",
+    ]);
+  }
 });
