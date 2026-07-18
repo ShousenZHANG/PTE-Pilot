@@ -58,7 +58,7 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
     "Total Word Count: 7",
   );
 
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
   const review = page.getByTestId("review-result");
   await expect(review).toContainText("before");
@@ -78,7 +78,7 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await answer.pressSequentially(
     "Students should submit their assignments before Friday",
   );
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
   await expect(page.getByTestId("review-score")).toHaveText("7/7");
   await expect(page.locator(".ai-score")).toBeHidden();
@@ -172,7 +172,7 @@ test("restores the verified set and learning data after a reload", async ({
   await answer.pressSequentially(
     "Students should submit their assignments by Friday",
   );
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Enter");
   await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
   await expect(page.getByTestId("review-score")).toHaveText("6/7");
 

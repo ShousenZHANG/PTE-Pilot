@@ -175,6 +175,7 @@ export class PracticeController extends EventTarget {
   #replayCount = 0;
   #latestNavigationEpoch = 0;
   #audioCommandPending = false;
+  #queuedRestart = false;
   #commandReturnPhase: "ANSWERING" | "REVIEW" = "ANSWERING";
   #initializeGeneration = 0;
   #rankRequestGeneration = 0;
@@ -217,6 +218,7 @@ export class PracticeController extends EventTarget {
     const generation = ++this.#initializeGeneration;
     const cleanup = this.teardownActivePorts();
     this.#reviewQueue = null;
+    this.#queuedRestart = false;
     this.patch({
       phase: "PROBING",
       siteStatus: "正在验证萤火虫页面",
@@ -733,6 +735,7 @@ export class PracticeController extends EventTarget {
       this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
     } finally {
       this.#audioCommandPending = false;
+      this.flushQueuedRestart();
     }
   }
 
@@ -742,6 +745,12 @@ export class PracticeController extends EventTarget {
 
   prewarmAudio(): void {
     this.#audio?.prewarm();
+  }
+
+  private flushQueuedRestart(): void {
+    if (!this.#queuedRestart) return;
+    this.#queuedRestart = false;
+    void this.restartAudio();
   }
 
   /*
@@ -774,6 +783,7 @@ export class PracticeController extends EventTarget {
       });
     } finally {
       this.#audioCommandPending = false;
+      this.flushQueuedRestart();
     }
   }
 
@@ -782,7 +792,13 @@ export class PracticeController extends EventTarget {
     const identity = this.#state.identity;
     const epoch = this.#latestNavigationEpoch;
     const generation = this.#initializeGeneration;
-    if (!audio || !identity || this.#audioCommandPending) return;
+    if (!audio || !identity) return;
+    if (this.#audioCommandPending) {
+      // A replay pressed while countdown autoplay is in flight must not be
+      // dropped; it runs the moment the current operation settles.
+      this.#queuedRestart = true;
+      return;
+    }
     this.#audioCommandPending = true;
     try {
       await audio.restart();
@@ -805,6 +821,7 @@ export class PracticeController extends EventTarget {
       this.patch({ audioStatus: "AUDIO_ERROR", notice: message });
     } finally {
       this.#audioCommandPending = false;
+      this.flushQueuedRestart();
     }
   }
 

@@ -83,8 +83,8 @@ export function routeKeyboard(
   if (
     !context.overlayOpen ||
     event.isComposing ||
-    event.ctrlKey ||
-    event.metaKey
+    // Ctrl/Cmd chords stay native, except Ctrl+Enter which submits.
+    ((event.ctrlKey || event.metaKey) && event.key !== "Enter")
   ) {
     return { action: null, consume: false };
   }
@@ -109,7 +109,12 @@ function routeForPhase(
 ): RoutedKey {
   const lower = event.key.toLocaleLowerCase("en-AU");
   if (context.phase === "ANSWERING") {
-    if (noModifiers(event) && event.key === "Enter") return action("submit");
+    // Plain Enter inserts a newline in the answer box; Ctrl/Cmd+Enter submits.
+    if (event.key === "Enter" && !event.altKey && !event.shiftKey) {
+      return event.ctrlKey || event.metaKey
+        ? action("submit")
+        : { action: null, consume: false };
+    }
     if (noModifiers(event) && event.key === "Escape")
       return action("open-command");
     if (onlyAlt(event)) {

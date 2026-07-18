@@ -51,7 +51,7 @@ answer sentences, and never bypasses any entitlement. Manifest permissions:
 | `Alt+Shift+P` | 打开 / 关闭驾驶舱 |
 | `Alt+P` | 播放 / 暂停（倒计时中 = 立即播放） |
 | `Alt+R` | 从头重播 |
-| `Enter` | 提交；结果页 = 下一题 |
+| `Ctrl+Enter` | 提交（输入框内 `Enter` 为换行）；结果页 `Enter` = 下一题 |
 | `Alt+J` / `Alt+K` | 下一题 / 上一题 |
 | `Alt+M` | 标记本题（复习优先） |
 | `Esc` | 命令层：`Q` 错题集 · `W` 错词库 · `E` 考试模式 · `S` 设置 · `B` 建索引 |

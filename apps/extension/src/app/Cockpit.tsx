@@ -355,6 +355,7 @@ export function Cockpit(): React.JSX.Element | null {
     if (countdownQuestionRef.current === timerIdentityKey) return;
     countdownQuestionRef.current = timerIdentityKey;
     autoPlayDeadlineRef.current = performance.now() + 3_000;
+    controllerRef.current?.prewarmAudio();
     setAutoPlayIn(3);
   }, [open, state.phase, state.audioStatus, timerIdentityKey]);
 
@@ -657,7 +658,7 @@ export function Cockpit(): React.JSX.Element | null {
             placeholder={
               state.mode === "exam"
                 ? ""
-                : "听完即写。Enter 提交，Esc 打开命令层。"
+                : "听完即写。Enter 换行，Ctrl+Enter 提交，Esc 命令层。"
             }
             onInput={(event) => {
               liveDraftRef.current = event.currentTarget.value;
@@ -673,7 +674,7 @@ export function Cockpit(): React.JSX.Element | null {
           <span className="answer-foot">
             <output ref={wordCountRef}>Total Word Count: 0</output>
             <span>
-              <kbd>Enter</kbd> 提交
+              <kbd>Ctrl Enter</kbd> 提交
             </span>
           </span>
         </label>

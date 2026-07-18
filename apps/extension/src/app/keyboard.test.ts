@@ -33,7 +33,15 @@ function key(
 describe("routeKeyboard", () => {
   it("leaves printable answer input native and routes only explicit shortcuts", () => {
     expect(key("a")).toEqual({ action: null, consume: false });
-    expect(key("Enter")).toEqual({ action: "submit", consume: true });
+    expect(key("Enter")).toEqual({ action: null, consume: false });
+    expect(key("Enter", {}, { ctrlKey: true })).toEqual({
+      action: "submit",
+      consume: true,
+    });
+    expect(key("Enter", {}, { metaKey: true })).toEqual({
+      action: "submit",
+      consume: true,
+    });
     expect(key("p", {}, { altKey: true })).toEqual({
       action: "play",
       consume: true,
