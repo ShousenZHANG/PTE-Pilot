@@ -347,6 +347,10 @@ function fireflyFixtureBody(heading: string, questionPicker: string): string {
     if (customPicker) customPicker.addEventListener("click", () => {
       if (document.querySelector(".el-select-dropdown__item")) return;
       const list = document.createElement("ul");
+      const noise = document.createElement("li");
+      noise.className = "el-select-dropdown__item";
+      noise.textContent = "无匹配数据";
+      list.append(noise);
       questions.forEach((question, index) => {
         const item = document.createElement("li");
         item.className = "el-select-dropdown__item";

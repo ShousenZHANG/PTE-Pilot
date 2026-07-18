@@ -675,13 +675,17 @@ export class FireflyDomAdapter {
     if (!items) {
       const picker = this.customQuestionPicker();
       if (!picker) throw new Error("select:missing");
-      picker.click();
+      // Element-UI style widgets often toggle on mousedown, and a bare
+      // synthetic click() does not deliver the full pointer sequence.
+      dispatchMouseSequence(picker);
       items = await pollFor(() => this.customQuestionItems(total), 2_000);
     }
     const target = items?.[position - 1];
     if (!target)
       throw new Error(items ? "select:target-missing" : "select:missing");
-    target.click();
+    if (normalizeLabel(target.textContent) !== String(position))
+      throw new Error("select:target-mismatch");
+    dispatchMouseSequence(target);
   }
 
   /*
@@ -827,9 +831,11 @@ export class FireflyDomAdapter {
 
   private customQuestionItems(expectedTotal?: number): HTMLElement[] | null {
     if (!this.customQuestionPicker()) return null;
+    // Other dropdowns (voice switcher, "no data" placeholders) share the
+    // item class; only the plain-number items form the question list.
     const items = Array.from(
       this.#document.querySelectorAll<HTMLElement>(".el-select-dropdown__item"),
-    );
+    ).filter((item) => /^\d+$/u.test(normalizeLabel(item.textContent)));
     return isSequentialQuestionPositionList(
       items.map((item) => item.textContent ?? ""),
       expectedTotal,
@@ -1329,6 +1335,14 @@ export function ownedQuestionId(node: HTMLElement): string | null {
     current = current.parentElement;
   }
   return null;
+}
+
+function dispatchMouseSequence(element: HTMLElement): void {
+  for (const type of ["mousedown", "mouseup", "click"] as const) {
+    element.dispatchEvent(
+      new MouseEvent(type, { bubbles: true, cancelable: true, view: window }),
+    );
+  }
 }
 
 async function pollFor<T>(

@@ -619,11 +619,16 @@ export class PracticeController extends EventTarget {
       let expectedIdentity = identity;
       let expectedEpoch = initialEpoch;
       if (this.#site.capabilities().select) {
-        result = await navigation.navigate({
-          kind: "select",
-          position: target.sitePosition,
-          expectedQuestionId: target.questionId,
-        });
+        result = await navigation.navigate(
+          {
+            kind: "select",
+            position: target.sitePosition,
+            expectedQuestionId: target.questionId,
+          },
+          // A direct jump includes opening the picker plus a full question
+          // load on the site; give it more room than a single-step switch.
+          15_000,
+        );
         expectedIdentity = result.identity;
         expectedEpoch = result.epoch;
       } else {
@@ -1137,11 +1142,14 @@ export class PracticeController extends EventTarget {
     }
     if (this.#site.capabilities().select) {
       return (
-        await navigation.navigate({
-          kind: "select",
-          position: question.position,
-          expectedQuestionId: question.questionId,
-        })
+        await navigation.navigate(
+          {
+            kind: "select",
+            position: question.position,
+            expectedQuestionId: question.questionId,
+          },
+          15_000,
+        )
       ).identity;
     }
     while (navigation.current.position !== question.position) {
