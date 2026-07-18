@@ -165,6 +165,15 @@ export function Cockpit(): React.JSX.Element | null {
     }
   }, []);
 
+  /*
+   * One redo path for the T key and the review-card button: clear the
+   * score (controller), empty the box, and put the caret back in it.
+   */
+  const performRedo = useCallback(async (): Promise<void> => {
+    await controllerRef.current?.redo();
+    clearTextarea();
+  }, [clearTextarea]);
+
   const runCommandAction = useCallback(
     async (action: KeyboardAction, session: number): Promise<void> => {
       const controller = controllerRef.current;
@@ -414,10 +423,8 @@ export function Cockpit(): React.JSX.Element | null {
         await controller.toggleMarked();
       } else if (action === "open-command") openCommand();
       else if (action === "close-command") closeCommand();
-      else if (action === "redo") {
-        await controller.redo();
-        clearTextarea();
-      } else if (action === "help") setPanel("help");
+      else if (action === "redo") await performRedo();
+      else if (action === "help") setPanel("help");
       else if (action === "retry") {
         setPanel("none");
         await controller.initialize();
@@ -430,10 +437,10 @@ export function Cockpit(): React.JSX.Element | null {
     }
   }, [
     autoPlayInRef,
-    clearTextarea,
     closeCommand,
     open,
     openCommand,
+    performRedo,
     runCommandAction,
     setPanel,
     state.keymap,
@@ -580,6 +587,8 @@ export function Cockpit(): React.JSX.Element | null {
             review={review}
             focused={state.phase === "REVIEW"}
             reviewRef={reviewRef}
+            onRedo={() => void performRedo()}
+            onNext={() => void controllerRef.current?.navigate("next")}
           />
         )}
       </section>

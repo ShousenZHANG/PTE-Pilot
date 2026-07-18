@@ -29,10 +29,14 @@ export function ReviewCard({
   review,
   focused,
   reviewRef,
+  onRedo,
+  onNext,
 }: {
   review: NonNullable<CockpitViewState["review"]>;
   focused: boolean;
   reviewRef: React.RefObject<HTMLElement | null>;
+  onRedo: () => void;
+  onNext: () => void;
 }): React.JSX.Element {
   const scorePercent =
     review.totalWords > 0
@@ -89,10 +93,29 @@ export function ReviewCard({
           {review.translation}
         </p>
       )}
-      <p className="review__next">
-        <kbd>Enter</kbd> 下一题 · <kbd>T</kbd> 重做 · <kbd>K</kbd> 上一题 ·{" "}
-        <kbd>R</kbd> 重播
-      </p>
+      <div className="review__actions">
+        <button
+          type="button"
+          className="review__redo"
+          data-testid="review-redo"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onRedo}
+        >
+          重做本题 <kbd>T</kbd>
+        </button>
+        <button
+          type="button"
+          className="review__next-btn"
+          data-testid="review-next"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onNext}
+        >
+          下一题 <kbd>Enter</kbd>
+        </button>
+        <span className="review__next">
+          <kbd>K</kbd> 上一题 · <kbd>R</kbd> 重播
+        </span>
+      </div>
     </section>
   );
 }

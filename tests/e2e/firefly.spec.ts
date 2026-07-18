@@ -73,9 +73,13 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await expect(page.getByTestId("review-score")).toHaveText("6/7");
   await expect(page.locator(".ai-score")).toBeHidden();
 
-  await page.waitForTimeout(450);
-  await page.keyboard.press("KeyT");
+  // Clicking 重做本题 must clear the score card, empty the box, and put
+  // the caret back into it — same chain as the T key.
+  await page.getByTestId("review-redo").click();
   await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
+  await expect(page.getByTestId("review-result")).toBeHidden();
+  await expect(answer).toHaveValue("");
+  await expect(answer).toBeFocused();
   await answer.pressSequentially(
     "Students should submit their assignments before Friday",
   );
