@@ -37,6 +37,10 @@ export default defineContentScript({
     const register = (element: HTMLAudioElement): void => {
       if (tracked.has(element)) return;
       tracked.add(element);
+      if (tracked.size > 16) {
+        const oldest = tracked.values().next().value;
+        if (oldest && oldest !== element) tracked.delete(oldest);
+      }
       for (const type of [
         "play",
         "playing",
@@ -102,12 +106,20 @@ export default defineContentScript({
           void element.play().catch(() => undefined);
           break;
         case "stop":
-          element.pause();
-          try {
-            element.currentTime = 0;
-          } catch {
-            // Not seekable yet.
+          // Question switch: silence every tracked instance and forget them,
+          // otherwise a later command would target the previous question's
+          // audio and stack two clips. The play() patch re-registers the new
+          // question's instance the moment the site starts it.
+          for (const audio of tracked) {
+            audio.pause();
+            try {
+              audio.currentTime = 0;
+            } catch {
+              // Not seekable yet.
+            }
           }
+          tracked.clear();
+          active = null;
           break;
         case "prewarm":
           element.preload = "auto";

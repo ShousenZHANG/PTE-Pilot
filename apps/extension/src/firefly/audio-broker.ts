@@ -6,7 +6,6 @@ export interface AudioSitePort {
   siteAudioElements(): HTMLAudioElement[];
   playAudio(): void;
   pauseAudio(): void;
-  audioBridgeAvailable?(): boolean;
   audioBridgeState?(): BridgeAudioState | null;
   audioBridgeCommand?(op: BridgeCommand): void;
   onAudioBridgeState?(listener: (state: BridgeAudioState) => void): () => void;
@@ -45,6 +44,7 @@ export class AudioBroker extends EventTarget {
   #element: HTMLAudioElement | null = null;
   #detachElement: (() => void) | null = null;
   #detachBridge: (() => void) | null = null;
+  #bridgeFreshAfter = 0;
 
   constructor(site: AudioSitePort) {
     super();
@@ -62,6 +62,7 @@ export class AudioBroker extends EventTarget {
     this.stopSiteAudio();
     this.#binding = { questionId, navigationEpoch };
     this.#examStartConsumed = false;
+    this.#bridgeFreshAfter = performance.now();
     this.setState("EMPTY");
     const binding = this.#binding;
     this.#detachBridge =
@@ -91,8 +92,17 @@ export class AudioBroker extends EventTarget {
       this.setState("PAUSED");
   }
 
+  /*
+   * The bridge is only trusted for the current question: a state snapshot
+   * must have arrived after this binding was made. Stale state means the
+   * tracked instance still belongs to the previous question, in which case
+   * the site-button fallback starts the fresh audio and the hook re-adopts.
+   */
   private bridgeUsable(): boolean {
-    return this.#site.audioBridgeAvailable?.() ?? false;
+    const state = this.#site.audioBridgeState?.();
+    return state !== null && state !== undefined
+      ? state.at >= this.#bridgeFreshAfter
+      : false;
   }
 
   /*
@@ -134,7 +144,11 @@ export class AudioBroker extends EventTarget {
       };
     }
     const bridged = this.#site.audioBridgeState?.();
-    if (bridged && bridged.duration > 0) {
+    if (
+      bridged &&
+      bridged.duration > 0 &&
+      bridged.at >= this.#bridgeFreshAfter
+    ) {
       return {
         currentTime: bridged.currentTime,
         duration: bridged.duration,

@@ -268,7 +268,7 @@ describe("AudioBroker direct element control", () => {
 
   it("drives playback through the MAIN-world bridge when no element exists", async () => {
     const commands: string[] = [];
-    let bridgeState = {
+    let latest = {
       currentTime: 0,
       duration: 6,
       paused: true,
@@ -276,16 +276,18 @@ describe("AudioBroker direct element control", () => {
       readyState: 4,
       at: 0,
     };
-    let push: ((state: typeof bridgeState) => void) | undefined;
+    let push: ((state: typeof latest) => void) | undefined;
     const broker = new AudioBroker(
       siteFixture({
-        audioBridgeAvailable: () => true,
-        audioBridgeState: () => bridgeState,
+        audioBridgeState: () => latest,
         audioBridgeCommand: (op) => {
           commands.push(op);
         },
         onAudioBridgeState: (listener) => {
-          push = listener;
+          push = (state) => {
+            latest = state;
+            listener(state);
+          };
           return () => {
             push = undefined;
           };
@@ -298,12 +300,22 @@ describe("AudioBroker direct element control", () => {
     broker.prewarm();
     expect(commands).toContain("prewarm");
 
+    // Stale state from before the binding is not trusted: play falls back
+    // to the site control instead of commanding the previous instance.
+    await broker.play();
+    expect(commands).not.toContain("play");
+
+    push?.({ ...latest, at: performance.now() });
     await broker.play();
     expect(commands).toContain("play");
     expect(broker.state).toBe("PLAYING");
 
-    bridgeState = { ...bridgeState, paused: false, currentTime: 2 };
-    push?.({ ...bridgeState, paused: true, ended: true, at: 1 });
+    push?.({
+      ...latest,
+      paused: true,
+      ended: true,
+      at: performance.now(),
+    });
     expect(broker.state).toBe("ENDED");
 
     await broker.restart();

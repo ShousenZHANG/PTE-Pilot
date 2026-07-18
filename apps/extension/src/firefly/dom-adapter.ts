@@ -688,10 +688,6 @@ export class FireflyDomAdapter {
    * the explicit id attributes are consulted — no full-page position scan —
    * and ambiguity degrades to null instead of throwing.
    */
-  audioBridgeAvailable(): boolean {
-    return this.#audioBridge.available();
-  }
-
   audioBridgeState(): BridgeAudioState | null {
     return this.#audioBridge.state();
   }
