@@ -365,7 +365,7 @@ export function Cockpit(): React.JSX.Element | null {
     autoPlayDeadlineRef.current = performance.now() + AUTO_PLAY_LEAD_MS;
     controllerRef.current?.prewarmAudio();
     setAutoPlayIn(AUTO_PLAY_LEAD_MS / 1_000);
-  }, [open, state.phase, state.audioStatus, timerIdentityKey]);
+  }, [open, state.phase, state.audioStatus, timerIdentityKey, setAutoPlayIn]);
 
   const countdownActive = autoPlayIn !== null;
   useEffect(() => {
@@ -386,7 +386,7 @@ export function Cockpit(): React.JSX.Element | null {
       if (autoPlayInRef.current !== null) setAutoPlayIn(remaining);
     }, 200);
     return () => clearInterval(interval);
-  }, [countdownActive, open]);
+  }, [countdownActive, open, setAutoPlayIn]);
   useEffect(() => {
     if (timerRef.current) timerRef.current.textContent = "00:00";
     if (!timerIdentityKey) return;
