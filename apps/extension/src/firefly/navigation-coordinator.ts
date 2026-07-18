@@ -3,7 +3,7 @@ import type { QuestionIdentity } from "../domain/types";
 export interface NavigationSitePort {
   readIdentity(): QuestionIdentity;
   click(name: "previous" | "next"): void;
-  selectQuestion(position: number): void;
+  selectQuestion(position: number): void | Promise<void>;
   observeQuestionChanges(
     callback: (identity: QuestionIdentity) => void,
   ): () => void;
@@ -68,7 +68,8 @@ export class NavigationCoordinator extends EventTarget {
         }),
       );
       if (signal?.aborted) throw new Error("navigation:aborted");
-      if (intent.kind === "select") this.#site.selectQuestion(intent.position);
+      if (intent.kind === "select")
+        await this.#site.selectQuestion(intent.position);
       else this.#site.click(intent.kind);
 
       const identity = await waitForIdentity(

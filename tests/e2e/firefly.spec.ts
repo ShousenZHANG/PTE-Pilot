@@ -186,6 +186,20 @@ test("restores the verified set and learning data after a reload", async ({
   await expect(page.getByTestId("command-layer")).toBeVisible();
   await page.keyboard.press("KeyW");
   await expect(page.getByTestId("word-library")).toContainText("before");
+
+  // Wrong-question drive across questions must use the lazily rendered
+  // custom picker for a direct jump instead of stepping one by one.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
+  await page.keyboard.press("Alt+KeyJ");
+  await expect(page.getByTestId("question-position")).toHaveText("2/3");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("command-layer")).toBeVisible();
+  await page.keyboard.press("KeyQ");
+  await expect(page.getByTestId("ranked-review")).toContainText("错题集");
+  await page.getByTestId("wrong-drive-start").click();
+  await expect(page.getByTestId("question-position")).toHaveText("1/3");
+  await expect(page.getByTestId("review-queue")).toHaveText("错题循环 1/1");
 });
 
 test("same-URL login page fails closed as AUTH_REQUIRED", async ({
@@ -227,11 +241,6 @@ function fireflyFixture(options: { verified?: boolean } = {}): string {
     </select>`
     : `<div class="el-select">
       <input readonly placeholder="选择题号" value="1">
-      <ul>
-        <li class="el-select-dropdown__item">1</li>
-        <li class="el-select-dropdown__item">2</li>
-        <li class="el-select-dropdown__item">3</li>
-      </ul>
     </div>`;
   return fireflyFixtureBody(heading, questionPicker);
 }
@@ -334,8 +343,18 @@ function fireflyFixtureBody(heading: string, questionPicker: string): string {
     byId("previous").addEventListener("click", () => { if (current > 0) { current -= 1; render(); } });
     const nativePicker = byId("question-select");
     if (nativePicker) nativePicker.addEventListener("change", (event) => { current = event.currentTarget.selectedIndex; render(); });
-    document.querySelectorAll(".el-select-dropdown__item").forEach((item, index) => {
-      item.addEventListener("click", () => { current = index; render(); });
+    const customPicker = document.querySelector(".el-select input");
+    if (customPicker) customPicker.addEventListener("click", () => {
+      if (document.querySelector(".el-select-dropdown__item")) return;
+      const list = document.createElement("ul");
+      questions.forEach((question, index) => {
+        const item = document.createElement("li");
+        item.className = "el-select-dropdown__item";
+        item.textContent = String(index + 1);
+        item.addEventListener("click", () => { current = index; render(); });
+        list.append(item);
+      });
+      document.querySelector(".el-select").append(list);
     });
   </script>
 </body>

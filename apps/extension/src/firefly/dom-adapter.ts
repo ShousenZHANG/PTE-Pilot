@@ -399,12 +399,9 @@ export class FireflyDomAdapter {
   }
 
   supportsDirectSelection(): boolean {
-    if (this.questionSelect() !== null) return true;
-    try {
-      return this.customQuestionItems(this.readIdentity().total) !== null;
-    } catch {
-      return false;
-    }
+    return (
+      this.questionSelect() !== null || this.customQuestionPicker() !== null
+    );
   }
 
   input(): HTMLTextAreaElement {
@@ -658,7 +655,13 @@ export class FireflyDomAdapter {
       : null;
   }
 
-  selectQuestion(position: number): void {
+  /*
+   * The custom (el-select style) picker renders its option list lazily:
+   * the items only exist in the DOM after the picker has been opened once.
+   * Direct selection therefore opens the picker and waits briefly for the
+   * options before clicking the target.
+   */
+  async selectQuestion(position: number): Promise<void> {
     const select = this.questionSelect();
     if (select) {
       const option = select.options.item(position - 1);
@@ -667,7 +670,14 @@ export class FireflyDomAdapter {
       select.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
-    const items = this.customQuestionItems(this.readIdentity().total);
+    const total = this.readIdentity().total;
+    let items = this.customQuestionItems(total);
+    if (!items) {
+      const picker = this.customQuestionPicker();
+      if (!picker) throw new Error("select:missing");
+      picker.click();
+      items = await pollFor(() => this.customQuestionItems(total), 2_000);
+    }
     const target = items?.[position - 1];
     if (!target)
       throw new Error(items ? "select:target-missing" : "select:missing");
@@ -805,14 +815,18 @@ export class FireflyDomAdapter {
     return null;
   }
 
-  private customQuestionItems(expectedTotal?: number): HTMLElement[] | null {
+  private customQuestionPicker(): HTMLInputElement | null {
     const pickers = Array.from(
       this.#document.querySelectorAll<HTMLInputElement>("input[readonly]"),
     ).filter(
       (input) =>
         normalizeLabel(input.placeholder) === "选择题号" && isVisible(input),
     );
-    if (pickers.length !== 1) return null;
+    return pickers.length === 1 ? (pickers[0] ?? null) : null;
+  }
+
+  private customQuestionItems(expectedTotal?: number): HTMLElement[] | null {
+    if (!this.customQuestionPicker()) return null;
     const items = Array.from(
       this.#document.querySelectorAll<HTMLElement>(".el-select-dropdown__item"),
     );
@@ -1315,6 +1329,19 @@ export function ownedQuestionId(node: HTMLElement): string | null {
     current = current.parentElement;
   }
   return null;
+}
+
+async function pollFor<T>(
+  probe: () => T | null,
+  timeoutMs: number,
+): Promise<T | null> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const value = probe();
+    if (value !== null) return value;
+    if (performance.now() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 function dedupe<T>(values: readonly T[], key: (value: T) => string): T[] {
