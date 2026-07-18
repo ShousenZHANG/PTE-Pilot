@@ -1,7 +1,7 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-export const AUDIO_COMMAND_SOURCE = "pte-pilot-audio-cmd";
-export const AUDIO_STATE_SOURCE = "pte-pilot-audio-state";
+const AUDIO_COMMAND_SOURCE = "pte-pilot-audio-cmd";
+const AUDIO_STATE_SOURCE = "pte-pilot-audio-state";
 
 /*
  * MAIN-world hook. The site creates its playback audio with new Audio()

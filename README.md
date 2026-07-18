@@ -5,9 +5,11 @@
 
 Local-first, keyboard-first Chrome (MV3) extension that rebuilds the Firefly
 PTE **Write From Dictation** practice experience: an exam-replica cockpit,
-zero-latency typing, in-cockpit AI scoring with a word-level diff,
-spaced-repetition review, a wrong-question drive, and a typing drill built
-from your frequently missed words.
+zero-latency typing, instant audio control through a MAIN-world hook (even
+when the site keeps its player off-DOM), in-cockpit AI scoring with a
+word-level diff, spaced-repetition review, a wrong-question drive, and a
+typing drill built from your frequently missed words. Your index and
+learning data are stored locally and survive reloads.
 
 The Firefly site keeps providing login, questions, original audio, scoring
 and navigation. PTE Pilot never exports the question bank, never stores full

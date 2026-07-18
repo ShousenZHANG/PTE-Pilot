@@ -65,10 +65,6 @@ export class MainWorldAudioBridge {
   state(): BridgeAudioState | null {
     return this.#last;
   }
-
-  available(): boolean {
-    return this.#last !== null;
-  }
 }
 
 function defaultWindow(): Window | null {

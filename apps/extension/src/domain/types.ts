@@ -97,10 +97,8 @@ export interface IndexSnapshot {
   schemaVersion: number;
 }
 
-export type ScoreSegmentKind = "correct" | "omit" | "error";
-
 export interface ScoreSegment {
-  kind: ScoreSegmentKind;
+  kind: "correct" | "omit" | "error";
   text: string;
 }
 
