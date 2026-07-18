@@ -232,7 +232,12 @@ export class PracticeController extends EventTarget {
     let probe = await this.probeWithGrace(generation);
     if (!this.isCurrentInitialization(generation)) return;
     if (predictionEditionStartupMode(probe) === "session") {
-      this.#site.beginSessionPredictionEdition();
+      // A reload loses the in-memory verified edition even though the index
+      // is stored. Re-identify the set from storage before degrading to an
+      // ephemeral session.
+      const restored = await this.restoreVerifiedEditionFromStorage(generation);
+      if (!this.isCurrentInitialization(generation)) return;
+      if (!restored) this.#site.beginSessionPredictionEdition();
       probe = this.#site.probe();
     }
     if (!probe.ok) {
@@ -1383,6 +1388,18 @@ export class PracticeController extends EventTarget {
       if (this.#indexer === indexer && this.isCurrentInitialization(generation))
         this.patch({ indexStatus: "FAILED" });
     }
+  }
+
+  private async restoreVerifiedEditionFromStorage(
+    generation: number,
+  ): Promise<boolean> {
+    const bare = this.#site.readBareIdentity();
+    if (!bare) return false;
+    const edition = await this.#runtime
+      .matchVerifiedEdition(bare)
+      .catch(() => null);
+    if (!this.isCurrentInitialization(generation) || !edition) return false;
+    return this.#site.restoreVerifiedPredictionEdition(edition, bare.total);
   }
 
   private async probeWithGrace(generation: number): Promise<ProbeResult> {

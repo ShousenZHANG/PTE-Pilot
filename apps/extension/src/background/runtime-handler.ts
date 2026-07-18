@@ -182,6 +182,17 @@ async function execute(
         action: request.action,
         words: await repository.listWordStats(request.limit),
       };
+    case "storage/matchVerifiedEdition":
+      return {
+        requestId: request.requestId,
+        ok: true,
+        action: request.action,
+        edition: await repository.matchVerifiedEdition({
+          questionId: request.questionId,
+          position: request.position,
+          total: request.total,
+        }),
+      };
     default:
       throw new InvalidRuntimeRequestError("unsupported runtime action");
   }

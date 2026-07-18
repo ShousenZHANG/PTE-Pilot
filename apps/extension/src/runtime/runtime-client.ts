@@ -137,6 +137,21 @@ export class RuntimeClient {
     });
   }
 
+  async matchVerifiedEdition(probe: {
+    questionId: string;
+    position: number;
+    total: number;
+  }): Promise<string | null> {
+    const response = await this.send({
+      requestId: crypto.randomUUID(),
+      action: "storage/matchVerifiedEdition",
+      questionId: probe.questionId,
+      position: probe.position,
+      total: probe.total,
+    });
+    return assertAction(response, "storage/matchVerifiedEdition").edition;
+  }
+
   async listWordStats(limit = 200): Promise<WordStatSummary[]> {
     const response = await this.send({
       requestId: crypto.randomUUID(),

@@ -133,6 +133,22 @@ export class PredictionEditionOverrideState {
     return current.value;
   }
 
+  /*
+   * Re-adopt a previously verified edition after a page reload, matched
+   * against stored index facts by the caller. No bootstrap token exists in
+   * this path; the format check is the gate.
+   */
+  restore(edition: string, total: number): boolean {
+    if (!isVerifiedQuestionSetEdition(edition, total)) return false;
+    this.#current = {
+      token: this.#createToken(),
+      value: edition,
+      state: "verified",
+      total,
+    };
+    return true;
+  }
+
   adopt(edition: string, total: number, bootstrapToken: string): void {
     const current = this.#current;
     if (current?.state !== "provisional" || current.token !== bootstrapToken)
@@ -266,6 +282,41 @@ export class FireflyDomAdapter {
   }
 
   readIdentity(): QuestionIdentity {
+    const bare = this.readPositionAndQuestionId();
+    return {
+      predictionEdition: this.readPredictionEdition(bare.total),
+      questionId: bare.questionId,
+      position: bare.position,
+      total: bare.total,
+      tags: this.readTags(),
+    };
+  }
+
+  /*
+   * Question facts without an edition. Used to re-identify a stored
+   * verified set on reload, before any edition can be resolved.
+   */
+  readBareIdentity(): {
+    questionId: string;
+    position: number;
+    total: number;
+  } | null {
+    try {
+      return this.readPositionAndQuestionId();
+    } catch {
+      return null;
+    }
+  }
+
+  restoreVerifiedPredictionEdition(edition: string, total: number): boolean {
+    return this.#predictionEditionOverride.restore(edition, total);
+  }
+
+  private readPositionAndQuestionId(): {
+    questionId: string;
+    position: number;
+    total: number;
+  } {
     const positions = this.visibleElements()
       .map((element) => parsePositionLabel(element.textContent ?? ""))
       .filter(
@@ -305,11 +356,9 @@ export class FireflyDomAdapter {
     );
 
     return {
-      predictionEdition: this.readPredictionEdition(position.total),
       questionId,
       position: position.position,
       total: position.total,
-      tags: this.readTags(),
     };
   }
 

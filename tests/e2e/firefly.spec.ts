@@ -137,6 +137,56 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   );
 });
 
+test("restores the verified set and learning data after a reload", async ({
+  extensionContext,
+}) => {
+  const page = await extensionContext.newPage();
+  await page.route("https://upload.fireflyau.com/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "audio/wav",
+      headers: { "access-control-allow-origin": "*" },
+      body: silentWav(),
+    });
+  });
+  await page.route("https://www.fireflyau.com/**", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: fireflyFixture({ verified: false }),
+    });
+  });
+  await page.goto(exerciseUrl);
+
+  await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
+  await expect(page.getByTestId("onboarding")).toBeVisible();
+  await page
+    .getByTestId("onboarding")
+    .getByRole("button", { name: "一键建立索引" })
+    .click();
+  await expect(page.getByTestId("index-status")).toContainText("COMPLETE", {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("onboarding")).toBeHidden();
+
+  const answer = page.getByTestId("answer-input");
+  await answer.pressSequentially(
+    "Students should submit their assignments by Friday",
+  );
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("practice-state")).toContainText("REVIEW");
+  await expect(page.getByTestId("review-score")).toHaveText("6/7");
+
+  await page.reload();
+  await expect(page.getByTestId("practice-state")).toContainText("ANSWERING");
+  await expect(page.getByTestId("onboarding")).toBeHidden();
+  await expect(page.getByTestId("index-status")).toContainText("COMPLETE");
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("command-layer")).toBeVisible();
+  await page.keyboard.press("KeyW");
+  await expect(page.getByTestId("word-library")).toContainText("before");
+});
+
 test("same-URL login page fails closed as AUTH_REQUIRED", async ({
   extensionContext,
 }) => {
@@ -156,20 +206,45 @@ test("same-URL login page fails closed as AUTH_REQUIRED", async ({
   await expect(page.getByTestId("recovery-retry")).toBeVisible();
 });
 
-function fireflyFixture(): string {
+/*
+ * verified=true mirrors a page that can express its own edition (explicit
+ * attribute plus a native select whose options enumerate the set).
+ * verified=false mirrors the real production page: a generic heading and an
+ * el-select style custom dropdown, which cannot produce a stable edition —
+ * the extension must bootstrap and later restore it from storage.
+ */
+function fireflyFixture(options: { verified?: boolean } = {}): string {
+  const verified = options.verified ?? true;
+  const heading = verified
+    ? '<h1 data-prediction-edition="weekly-2026-29">周预测 weekly-2026-29</h1>'
+    : "<h1>周预测</h1>";
+  const questionPicker = verified
+    ? `<select aria-label="选择题号" id="question-select">
+      <option value="131001" data-question-id="131001">1</option>
+      <option value="131002" data-question-id="131002">2</option>
+      <option value="131003" data-question-id="131003">3</option>
+    </select>`
+    : `<div class="el-select">
+      <input readonly placeholder="选择题号" value="1">
+      <ul>
+        <li class="el-select-dropdown__item">1</li>
+        <li class="el-select-dropdown__item">2</li>
+        <li class="el-select-dropdown__item">3</li>
+      </ul>
+    </div>`;
+  return fireflyFixtureBody(heading, questionPicker);
+}
+
+function fireflyFixtureBody(heading: string, questionPicker: string): string {
   return `<!doctype html>
 <html>
 <head><meta charset="utf-8"><style>body{font-family:sans-serif}#site-shell{padding:30px}textarea{display:block;width:500px;height:100px}.player-card{width:280px;padding:10px;border:1px solid #ddd}.audio-pause-btn{cursor:pointer}.ai-score[hidden]{display:none}</style></head>
 <body>
   <main id="site-shell">
-    <h1 data-prediction-edition="weekly-2026-29">周预测 weekly-2026-29</h1>
+    ${heading}
     <strong id="position">WFD 1/3</strong>
     <span id="question-id" data-question-id="131001">131001</span>
-    <select aria-label="选择题号" id="question-select">
-      <option value="131001" data-question-id="131001">1</option>
-      <option value="131002" data-question-id="131002">2</option>
-      <option value="131003" data-question-id="131003">3</option>
-    </select>
+    ${questionPicker}
     <div class="player-card">
       <div class="player-title">正常难度（女1）</div>
       <audio id="site-audio" preload="auto" src="https://upload.fireflyau.com/audio/131001.mp3"></audio>
@@ -208,7 +283,10 @@ function fireflyFixture(): string {
       byId("position").textContent = "WFD " + (current + 1) + "/" + questions.length;
       byId("question-id").textContent = question.id;
       byId("question-id").dataset.questionId = question.id;
-      byId("question-select").selectedIndex = current;
+      const nativeSelect = byId("question-select");
+      if (nativeSelect) nativeSelect.selectedIndex = current;
+      const picker = document.querySelector(".el-select input");
+      if (picker) picker.value = String(current + 1);
       byId("site-answer").value = "";
       document.querySelector(".ai-score").hidden = true;
       const audio = byId("site-audio");
@@ -253,7 +331,11 @@ function fireflyFixture(): string {
     byId("redo").addEventListener("click", render);
     byId("next").addEventListener("click", () => { if (current < questions.length - 1) { current += 1; render(); } });
     byId("previous").addEventListener("click", () => { if (current > 0) { current -= 1; render(); } });
-    byId("question-select").addEventListener("change", (event) => { current = event.currentTarget.selectedIndex; render(); });
+    const nativePicker = byId("question-select");
+    if (nativePicker) nativePicker.addEventListener("change", (event) => { current = event.currentTarget.selectedIndex; render(); });
+    document.querySelectorAll(".el-select-dropdown__item").forEach((item, index) => {
+      item.addEventListener("click", () => { current = index; render(); });
+    });
   </script>
 </body>
 </html>`;

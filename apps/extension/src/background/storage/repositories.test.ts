@@ -149,6 +149,53 @@ describe("CockpitRepositories", () => {
     expect(progress?.streak).toBe(1);
   });
 
+  test("re-identifies a stored verified set by position and question", async () => {
+    await db.snapshots.put({
+      predictionEdition: "yc-set-3-aaaaaaaaaaaaaaaa",
+      orderedQuestionIds: ["131001", "131002", "131003"],
+      siteTotal: 3,
+      completeness: "complete",
+      schemaVersion: 1,
+    });
+
+    await expect(
+      repository.matchVerifiedEdition({
+        questionId: "131002",
+        position: 2,
+        total: 3,
+      }),
+    ).resolves.toBe("yc-set-3-aaaaaaaaaaaaaaaa");
+    await expect(
+      repository.matchVerifiedEdition({
+        questionId: "131003",
+        position: 2,
+        total: 3,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.matchVerifiedEdition({
+        questionId: "131002",
+        position: 2,
+        total: 4,
+      }),
+    ).resolves.toBeNull();
+
+    await db.snapshots.put({
+      predictionEdition: "yc-set-3-bbbbbbbbbbbbbbbb",
+      orderedQuestionIds: ["131001", "131002", "131009"],
+      siteTotal: 3,
+      completeness: "complete",
+      schemaVersion: 1,
+    });
+    await expect(
+      repository.matchVerifiedEdition({
+        questionId: "131002",
+        position: 2,
+        total: 3,
+      }),
+    ).resolves.toBeNull();
+  });
+
   test("is idempotent for the same attemptId", async () => {
     await repository.commitAttempt("yc-2026-w29", attempt);
     await repository.commitAttempt("yc-2026-w29", attempt);

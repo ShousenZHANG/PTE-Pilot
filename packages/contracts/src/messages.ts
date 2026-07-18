@@ -137,6 +137,12 @@ export const RuntimeRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("storage/listWordStats"),
     limit: z.number().int().positive().max(500),
   }),
+  request({
+    action: z.literal("storage/matchVerifiedEdition"),
+    questionId: QuestionIdSchema,
+    position: z.number().int().positive(),
+    total: z.number().int().positive(),
+  }),
 ]);
 export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 
@@ -176,6 +182,10 @@ export const RuntimeSuccessSchema = z.discriminatedUnion("action", [
   success({
     action: z.literal("storage/listWordStats"),
     words: z.array(WordStatSummarySchema),
+  }),
+  success({
+    action: z.literal("storage/matchVerifiedEdition"),
+    edition: PredictionEditionSchema.nullable(),
   }),
 ]);
 export type RuntimeSuccess = z.infer<typeof RuntimeSuccessSchema>;

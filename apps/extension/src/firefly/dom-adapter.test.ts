@@ -321,6 +321,16 @@ describe("Element UI question picker evidence", () => {
 });
 
 describe("PredictionEditionOverrideState", () => {
+  it("restores a stored verified edition after a reload without a bootstrap", () => {
+    const state = new PredictionEditionOverrideState(() => "restore-1");
+
+    expect(state.restore("yc-set-3-0123456789abcdef", 3)).toBe(true);
+    expect(state.probeDiagnostic()).toBeNull();
+    expect(state.resolve(3)).toBe("yc-set-3-0123456789abcdef");
+    expect(state.restore("not-a-verified-edition", 3)).toBe(false);
+    expect(state.restore("yc-set-4-0123456789abcdef", 3)).toBe(false);
+  });
+
   it("blocks probing with the bootstrap diagnostic while provisional", () => {
     const state = new PredictionEditionOverrideState(() => "bootstrap-1");
 

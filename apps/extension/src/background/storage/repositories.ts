@@ -191,6 +191,29 @@ export class CockpitRepositories {
     );
   }
 
+  /*
+   * Re-identify a verified question set after a page reload. The site often
+   * cannot express a stable edition itself, so the anchor is a stored
+   * complete index whose question at the probed position matches exactly.
+   * Ambiguity (several matching sets) fails closed to null.
+   */
+  async matchVerifiedEdition(probe: {
+    questionId: string;
+    position: number;
+    total: number;
+  }): Promise<string | null> {
+    const snapshots = await this.db.snapshots.toArray();
+    const matches = snapshots.filter(
+      (snapshot) =>
+        snapshot.completeness === "complete" &&
+        snapshot.siteTotal === probe.total &&
+        snapshot.orderedQuestionIds[probe.position - 1] === probe.questionId,
+    );
+    return matches.length === 1
+      ? (matches[0]?.predictionEdition ?? null)
+      : null;
+  }
+
   async listCandidateFacts(
     predictionEdition: string,
   ): Promise<CandidateFact[]> {
