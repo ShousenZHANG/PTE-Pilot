@@ -574,10 +574,17 @@ export class PracticeController extends EventTarget {
       onSuccess: () => {
         this.#replayCount = 0;
         this.#startedAt = performance.now();
+        // A redo is a fresh attempt: rebind the audio so the exam lead-in
+        // (countdown, locked replay, one-play allowance) starts over.
+        this.#audio?.bind(
+          ticket.identity.questionId,
+          this.#latestNavigationEpoch,
+        );
         this.patch({
           phase: "ANSWERING",
           draft: "",
           review: null,
+          audioStatus: "EMPTY",
           notice: "已重置本题",
         });
       },
@@ -611,6 +618,9 @@ export class PracticeController extends EventTarget {
    * keeps the strict error surface.
    */
   async autoPlayAudio(): Promise<void> {
+    // Countdown-driven playback only ever fires into an answering surface;
+    // a submission or review that landed meanwhile silences it.
+    if (this.#state.phase !== "ANSWERING") return;
     await this.runAudioCommand((audio) => audio.play(), {
       onFailure: () => {
         this.patch({

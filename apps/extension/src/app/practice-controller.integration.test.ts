@@ -248,6 +248,9 @@ describe("practice loop integration", () => {
     await controller.redo();
     expect(controller.state.phase).toBe("ANSWERING");
     expect(controller.state.draft).toBe("");
+    // A redo restarts the exam lead-in: audio returns to EMPTY so the
+    // countdown arms again exactly like a fresh question entry.
+    expect(controller.state.audioStatus).toBe("EMPTY");
   });
 
   it("accepts a same-question resubmission after a perfect redo", async () => {

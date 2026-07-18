@@ -80,6 +80,8 @@ test("keyboard-only WFD flow follows Firefly, scores, and records word errors", 
   await expect(page.getByTestId("review-result")).toBeHidden();
   await expect(answer).toHaveValue("");
   await expect(answer).toBeFocused();
+  // Redo restarts the exam lead-in: countdown showing, replay locked.
+  await expect(page.getByTestId("audio-status")).toContainText("Beginning in");
   await answer.pressSequentially(
     "Students should submit their assignments before Friday",
   );

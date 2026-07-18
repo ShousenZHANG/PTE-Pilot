@@ -47,7 +47,10 @@ export function useAutoPlayCountdown(options: {
     autoPlayInRef.current = value;
     setAutoPlayInState(value);
   }, []);
-  const countdownQuestionRef = useRef("");
+  // One countdown per EMPTY audio session: a question switch or a redo
+  // resets the status to EMPTY and therefore arms a fresh lead-in, while a
+  // failed auto-play (still EMPTY) never re-arms into a loop.
+  const armedRef = useRef(false);
   const autoPlayDeadlineRef = useRef(0);
 
   useEffect(() => {
@@ -57,11 +60,12 @@ export function useAutoPlayCountdown(options: {
       audioStatus !== "EMPTY" ||
       !timerIdentityKey
     ) {
-      if (audioStatus !== "EMPTY") setAutoPlayIn(null);
+      armedRef.current = false;
+      setAutoPlayIn(null);
       return;
     }
-    if (countdownQuestionRef.current === timerIdentityKey) return;
-    countdownQuestionRef.current = timerIdentityKey;
+    if (armedRef.current) return;
+    armedRef.current = true;
     autoPlayDeadlineRef.current = performance.now() + AUTO_PLAY_LEAD_MS;
     controllerRef.current?.prewarmAudio();
     setAutoPlayIn(AUTO_PLAY_LEAD_MS / 1_000);
