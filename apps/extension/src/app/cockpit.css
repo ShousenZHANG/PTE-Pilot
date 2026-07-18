@@ -211,6 +211,14 @@ kbd {
   margin: 0 auto;
   padding: clamp(20px, 4.5vh, 40px) 0 20px;
   overflow: auto;
+  transition: opacity 0.15s ease;
+}
+
+/* Instant feedback: a received navigation/submission dims the deck. */
+.cockpit[data-phase="NAVIGATING"] .practice-deck,
+.cockpit[data-phase="RESETTING"] .practice-deck {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .instructions {
@@ -386,6 +394,10 @@ kbd {
   background: var(--surface);
 }
 
+.cockpit[data-phase="SUBMITTING"] .answer-shell {
+  opacity: 0.7;
+}
+
 .answer-shell:focus-within {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px var(--blue-soft);
@@ -451,6 +463,31 @@ kbd {
   from {
     opacity: 0;
     transform: translateY(8px);
+  }
+}
+
+/* Scoring skeleton: shown the moment a submission leaves, replaced by the
+ * real card when the review lands — the wait reads as progress, not a hang. */
+.review--skeleton .skeleton-line {
+  height: 14px;
+  border-radius: 3px;
+  background: var(--line-soft);
+  animation: skeleton-pulse 1s ease-in-out infinite;
+}
+
+.review--skeleton .skeleton-line:nth-child(2) {
+  width: 72%;
+  animation-delay: 0.15s;
+}
+
+.review--skeleton .skeleton-line:nth-child(3) {
+  width: 45%;
+  animation-delay: 0.3s;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -579,6 +616,23 @@ kbd {
 
 [data-testid="practice-notice"] {
   color: var(--notice);
+}
+
+/* A changed notice flashes once so footer messages are actually seen. */
+[data-testid="practice-notice"]:not(:empty) {
+  animation: notice-flash 900ms ease-out;
+}
+
+@keyframes notice-flash {
+  0% {
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255, 216, 137, 0.9);
+  }
+}
+
+/* Countdown lead-in drains an amber bar so the wait is visible at a glance. */
+.audio-box[data-countdown="true"] .audio-fill {
+  background: var(--exam);
 }
 
 .footer-menu {

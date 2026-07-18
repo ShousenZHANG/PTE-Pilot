@@ -371,21 +371,32 @@ export function Cockpit(): React.JSX.Element | null {
   useEffect(() => {
     if (!countdownActive || !open) return;
     // Deadline-based so the displayed seconds never drift from real time.
+    if (audioBoxRef.current) audioBoxRef.current.dataset.countdown = "true";
     const interval = setInterval(() => {
       // The site may insert the audio element after bind; keep re-warming so
       // the clip is fully buffered by the time the countdown fires.
       controllerRef.current?.prewarmAudio();
-      const remaining = Math.ceil(
-        (autoPlayDeadlineRef.current - performance.now()) / 1_000,
-      );
+      const remainingMs = autoPlayDeadlineRef.current - performance.now();
+      if (audioFillRef.current) {
+        const percent = Math.max(
+          0,
+          Math.min(100, (remainingMs / AUTO_PLAY_LEAD_MS) * 100),
+        );
+        audioFillRef.current.style.width = `${percent.toFixed(1)}%`;
+      }
+      const remaining = Math.ceil(remainingMs / 1_000);
       if (remaining <= 0) {
         setAutoPlayIn(null);
         void controllerRef.current?.autoPlayAudio();
         return;
       }
       if (autoPlayInRef.current !== null) setAutoPlayIn(remaining);
-    }, 200);
-    return () => clearInterval(interval);
+    }, 100);
+    return () => {
+      clearInterval(interval);
+      if (audioBoxRef.current) delete audioBoxRef.current.dataset.countdown;
+      if (audioFillRef.current) audioFillRef.current.style.width = "";
+    };
   }, [countdownActive, open, setAutoPlayIn]);
   useEffect(() => {
     if (timerRef.current) timerRef.current.textContent = "00:00";
@@ -687,6 +698,18 @@ export function Cockpit(): React.JSX.Element | null {
           </span>
         </label>
 
+        {state.phase === "SUBMITTING" && !review && (
+          <section className="review review--skeleton" aria-hidden="true">
+            <header className="review__head">
+              <strong className="review__title">AI 评分</strong>
+              <span className="review__legend">正在评分…</span>
+            </header>
+            <div className="skeleton-line" />
+            <div className="skeleton-line" />
+            <div className="skeleton-line" />
+          </section>
+        )}
+
         {review && (
           <section
             className="review"
@@ -772,7 +795,11 @@ export function Cockpit(): React.JSX.Element | null {
               错题循环 {state.reviewQueue.position}/{state.reviewQueue.total}
             </span>
           )}
-          <span data-testid="practice-notice" aria-live="polite">
+          <span
+            key={state.notice}
+            data-testid="practice-notice"
+            aria-live="polite"
+          >
             {state.notice}
           </span>
         </div>
