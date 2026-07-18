@@ -12,6 +12,7 @@
       "!**/test-results",
       "!**/playwright-report",
       "!PTE-Pilot-Chrome-latest",
+      "!PTE-Pilot-*-chrome",
       "!packages/*/dist"
     ]
   },
