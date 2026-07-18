@@ -56,77 +56,35 @@ function stem(value: string): string {
   return word;
 }
 
-function classify(expected: string, actual: string): AttemptError["type"] {
+/*
+ * A missed answer word and a wrong typed word are only paired when they are
+ * plausibly the same word (shared stem, or within the spelling distance
+ * budget). Distant words stay a separate omission plus an extra word, which
+ * matches how the exam scorer presents them.
+ */
+function pairType(
+  expected: string,
+  actual: string,
+): AttemptError["type"] | null {
   if (stem(expected) === stem(actual)) return "word_form";
   const expectedWord = normalized(expected);
   const actualWord = normalized(actual);
-  const distance = levenshtein(expectedWord, actualWord);
-  const spellingLimit = Math.max(
+  const limit = Math.max(
     1,
     Math.floor(Math.max(expectedWord.length, actualWord.length) * 0.25),
   );
-  return distance <= spellingLimit ? "spelling" : "substitution";
+  return levenshtein(expectedWord, actualWord) <= limit ? "spelling" : null;
 }
 
-function sameMultiset(
-  expected: readonly string[],
-  actual: readonly string[],
-): boolean {
-  if (expected.length !== actual.length) return false;
-  const left = expected.map(normalized).sort();
-  const right = actual.map(normalized).sort();
-  return left.every((word, index) => word === right[index]);
-}
-
-function lcsPairs(
-  expected: readonly string[],
-  actual: readonly string[],
-): Array<readonly [number, number]> {
-  const table = Array.from({ length: expected.length + 1 }, () =>
-    Array<number>(actual.length + 1).fill(0),
-  );
-  for (let row = expected.length - 1; row >= 0; row -= 1) {
-    for (let column = actual.length - 1; column >= 0; column -= 1) {
-      const currentRow = table[row];
-      if (!currentRow) continue;
-      currentRow[column] =
-        normalized(expected[row] ?? "") === normalized(actual[column] ?? "")
-          ? (table[row + 1]?.[column + 1] ?? 0) + 1
-          : Math.max(
-              table[row + 1]?.[column] ?? 0,
-              currentRow[column + 1] ?? 0,
-            );
-    }
-  }
-
-  const pairs: Array<readonly [number, number]> = [];
-  let row = 0;
-  let column = 0;
-  while (row < expected.length && column < actual.length) {
-    if (normalized(expected[row] ?? "") === normalized(actual[column] ?? "")) {
-      pairs.push([row, column]);
-      row += 1;
-      column += 1;
-    } else if (
-      (table[row + 1]?.[column] ?? 0) >= (table[row]?.[column + 1] ?? 0)
-    ) {
-      row += 1;
-    } else {
-      column += 1;
-    }
-  }
-  return pairs;
-}
-
-function accuracyFor(
-  correctCount: number,
-  expectedCount: number,
-  actualCount: number,
-): number {
-  const denominator = Math.max(expectedCount, actualCount);
-  return denominator === 0 ? 1 : correctCount / denominator;
-}
-
+/*
+ * Real PTE Write From Dictation scoring: one point for every answer word
+ * that appears (correctly spelled) anywhere in the response. Word order is
+ * irrelevant and wrong or extra words are never penalised — probing
+ * abbreviations before the sentence cost nothing. The rendered line mirrors
+ * the exam report: the response in typed order with hits in green and
+ * misses struck through, and each omitted answer word inserted in brackets
+ * before its closest misspelling (or appended when none exists).
+ */
 export function diffWords(
   expectedText: string,
   actualText: string,
@@ -134,81 +92,93 @@ export function diffWords(
   const expectedTokens = tokenizeWords(expectedText);
   const actualTokens = tokenizeWords(actualText);
 
-  if (sameMultiset(expectedTokens, actualTokens)) {
-    const errors: AttemptError[] = [];
-    const segments: ScoreSegment[] = [];
-    expectedTokens.forEach((expected, index) => {
-      const actual = actualTokens[index] ?? "";
-      if (normalized(expected) === normalized(actual)) {
-        segments.push({ kind: "correct", text: expected });
-        return;
-      }
-      errors.push({ expected, actual, type: "order" });
-      segments.push({ kind: "omit", text: expected });
-      segments.push({ kind: "error", text: actual });
-    });
-    const correctCount = expectedTokens.length - errors.length;
-    return {
-      expectedTokens,
-      actualTokens,
-      correctCount,
-      accuracy: accuracyFor(
-        correctCount,
-        expectedTokens.length,
-        actualTokens.length,
-      ),
-      errors,
-      segments,
-    };
+  const pool = new Map<string, string[]>();
+  for (const token of expectedTokens) {
+    const key = normalized(token);
+    const queue = pool.get(key);
+    if (queue) queue.push(token);
+    else pool.set(key, [token]);
   }
 
-  const pairs = lcsPairs(expectedTokens, actualTokens);
+  const marks = actualTokens.map((token) => {
+    const queue = pool.get(normalized(token));
+    if (queue && queue.length > 0) {
+      queue.shift();
+      return { token, hit: true };
+    }
+    return { token, hit: false };
+  });
+  const correctCount = marks.filter((mark) => mark.hit).length;
+
+  const leftovers: Array<{ display: string; pairedIndex: number | null }> = [];
+  for (const queue of pool.values()) {
+    for (const display of queue) {
+      leftovers.push({ display, pairedIndex: null });
+    }
+  }
+
   const errors: AttemptError[] = [];
-  const segments: ScoreSegment[] = [];
-  let expectedCursor = 0;
-  let actualCursor = 0;
-  const boundaries: Array<readonly [number, number]> = [
-    ...pairs,
-    [expectedTokens.length, actualTokens.length],
-  ];
-  for (const [expectedMatch, actualMatch] of boundaries) {
-    const expectedGap = expectedTokens.slice(expectedCursor, expectedMatch);
-    const actualGap = actualTokens.slice(actualCursor, actualMatch);
-    const paired = Math.min(expectedGap.length, actualGap.length);
-    for (let index = 0; index < paired; index += 1) {
-      const expected = expectedGap[index];
-      const actual = actualGap[index];
-      if (expected !== undefined && actual !== undefined) {
-        errors.push({ expected, actual, type: classify(expected, actual) });
-        segments.push({ kind: "omit", text: expected });
-        segments.push({ kind: "error", text: actual });
-      }
+  marks.forEach((mark, index) => {
+    if (mark.hit) return;
+    let best: {
+      leftover: (typeof leftovers)[number];
+      distance: number;
+    } | null = null;
+    for (const leftover of leftovers) {
+      if (leftover.pairedIndex !== null) continue;
+      if (pairType(leftover.display, mark.token) === null) continue;
+      const distance = levenshtein(
+        normalized(leftover.display),
+        normalized(mark.token),
+      );
+      if (!best || distance < best.distance) best = { leftover, distance };
     }
-    for (const expected of expectedGap.slice(paired)) {
-      errors.push({ expected, actual: "", type: "missing" });
-      segments.push({ kind: "omit", text: expected });
+    if (best) {
+      best.leftover.pairedIndex = index;
+      errors.push({
+        expected: best.leftover.display,
+        actual: mark.token,
+        type: pairType(best.leftover.display, mark.token) ?? "spelling",
+      });
+    } else {
+      errors.push({ expected: "", actual: mark.token, type: "extra" });
     }
-    for (const actual of actualGap.slice(paired)) {
-      errors.push({ expected: "", actual, type: "extra" });
-      segments.push({ kind: "error", text: actual });
+  });
+  for (const leftover of leftovers) {
+    if (leftover.pairedIndex === null) {
+      errors.push({ expected: leftover.display, actual: "", type: "missing" });
     }
-    const matchedExpected = expectedTokens[expectedMatch];
-    if (matchedExpected !== undefined && expectedMatch < expectedTokens.length)
-      segments.push({ kind: "correct", text: matchedExpected });
-    expectedCursor = expectedMatch + 1;
-    actualCursor = actualMatch + 1;
   }
 
-  const correctCount = pairs.length;
+  const insertions = new Map<number, string[]>();
+  const trailing: string[] = [];
+  for (const leftover of leftovers) {
+    if (leftover.pairedIndex !== null) {
+      const queue = insertions.get(leftover.pairedIndex);
+      if (queue) queue.push(leftover.display);
+      else insertions.set(leftover.pairedIndex, [leftover.display]);
+    } else {
+      trailing.push(leftover.display);
+    }
+  }
+
+  const segments: ScoreSegment[] = [];
+  marks.forEach((mark, index) => {
+    for (const omitted of insertions.get(index) ?? []) {
+      segments.push({ kind: "omit", text: omitted });
+    }
+    segments.push({ kind: mark.hit ? "correct" : "error", text: mark.token });
+  });
+  for (const omitted of trailing) {
+    segments.push({ kind: "omit", text: omitted });
+  }
+
   return {
     expectedTokens,
     actualTokens,
     correctCount,
-    accuracy: accuracyFor(
-      correctCount,
-      expectedTokens.length,
-      actualTokens.length,
-    ),
+    accuracy:
+      expectedTokens.length === 0 ? 1 : correctCount / expectedTokens.length,
     errors,
     segments,
   };

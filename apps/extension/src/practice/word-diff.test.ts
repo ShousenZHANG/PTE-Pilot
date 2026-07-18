@@ -1,78 +1,123 @@
 import { describe, expect, test } from "vitest";
-import { diffWords } from "./word-diff";
+import { diffWords, tokenizeWords } from "./word-diff";
 
-describe("diffWords", () => {
-  test.each([
-    ["write the sentence", "write sentence", "missing"],
-    ["write sentence", "write the sentence", "extra"],
-    ["write the sentence", "write the sentense", "spelling"],
-    ["many students arrived", "many student arrived", "word_form"],
-    ["the lecture starts", "the seminar starts", "substitution"],
-  ] as const)("classifies %s against %s as %s", (expected, actual, type) => {
-    expect(diffWords(expected, actual).errors).toContainEqual(
-      expect.objectContaining({ type }),
-    );
-  });
-
-  test("marks reordered words without treating them as new vocabulary", () => {
-    expect(
-      diffWords("the lecture starts", "lecture the starts").errors,
-    ).toEqual([
-      { expected: "the", actual: "lecture", type: "order" },
-      { expected: "lecture", actual: "the", type: "order" },
+describe("tokenizeWords", () => {
+  test("strips punctuation, keeps apostrophes, splits on whitespace", () => {
+    expect(tokenizeWords("It's a test, isn't it?")).toEqual([
+      "It's",
+      "a",
+      "test",
+      "isn't",
+      "it",
     ]);
   });
+});
 
-  test("normalizes case and punctuation but preserves display tokens", () => {
-    const result = diffWords("Students arrive.", "students arrive");
+describe("diffWords — real exam bag-of-words scoring", () => {
+  test("word order is irrelevant: shuffled answers score full marks", () => {
+    const result = diffWords("first second third", "third first second");
+    expect(result.correctCount).toBe(3);
     expect(result.accuracy).toBe(1);
-    expect(result.expectedTokens).toEqual(["Students", "arrive"]);
+    expect(result.errors).toEqual([]);
   });
 
-  test("penalizes extra words and remains deterministic", () => {
-    const first = diffWords("write sentence", "write sentence now");
-    expect(first.accuracy).toBeCloseTo(2 / 3);
-    expect(first.errors).toContainEqual({
+  test("extra and probe words are never penalised", () => {
+    const result = diffWords("write sentence", "write sentence now");
+    expect(result.correctCount).toBe(2);
+    expect(result.accuracy).toBe(1);
+    expect(result.errors).toContainEqual({
       expected: "",
       actual: "now",
       type: "extra",
     });
-    expect(diffWords("write sentence", "write sentence now")).toEqual(first);
   });
 
-  test("segments mirror the exam score line with omit and error marks", () => {
+  test("case differences do not cost points", () => {
+    const result = diffWords("Students arrive.", "students arrive");
+    expect(result.correctCount).toBe(2);
+    expect(result.accuracy).toBe(1);
+  });
+
+  test("replicates the exam report for a probed-abbreviation answer", () => {
     const result = diffWords(
-      "A good architectural structure should be useful durable and beautiful",
-      "a good architechture should be useful durable and",
+      "All industries are a system of inputs, processes, outputs and feedback.",
+      "a i a a s i p o a f All industries are an system a of inputs processes ouputs and feedback",
     );
 
-    expect(result.correctCount).toBe(7);
-    expect(result.expectedTokens).toHaveLength(10);
-    expect(result.segments).toEqual([
-      { kind: "correct", text: "A" },
-      { kind: "correct", text: "good" },
-      { kind: "omit", text: "architectural" },
-      { kind: "error", text: "architechture" },
-      { kind: "omit", text: "structure" },
-      { kind: "correct", text: "should" },
-      { kind: "correct", text: "be" },
-      { kind: "correct", text: "useful" },
-      { kind: "correct", text: "durable" },
-      { kind: "correct", text: "and" },
-      { kind: "omit", text: "beautiful" },
-    ]);
+    expect(result.expectedTokens).toHaveLength(11);
+    expect(result.correctCount).toBe(10);
+    expect(result.errors).toContainEqual({
+      expected: "outputs",
+      actual: "ouputs",
+      type: "spelling",
+    });
+    expect(
+      result.errors.filter((error) => error.type === "missing"),
+    ).toHaveLength(0);
+
+    // The omitted word is bracketed right before its misspelling.
+    const kinds = result.segments.map(
+      (segment) => `${segment.kind}:${segment.text}`,
+    );
+    const omitIndex = kinds.indexOf("omit:outputs");
+    expect(kinds[omitIndex + 1]).toBe("error:ouputs");
+    // The first probe letter "a" consumes the answer's "a" and counts.
+    expect(kinds[0]).toBe("correct:a");
   });
 
-  test("segments keep every correct word when order is the only mistake", () => {
-    const result = diffWords("first second", "second first");
-    expect(
-      result.segments.filter((segment) => segment.kind === "correct"),
-    ).toHaveLength(0);
-    expect(result.segments).toEqual([
-      { kind: "omit", text: "first" },
-      { kind: "error", text: "second" },
-      { kind: "omit", text: "second" },
-      { kind: "error", text: "first" },
-    ]);
+  test("a distant wrong word stays an omission plus an extra word", () => {
+    const result = diffWords(
+      "Students should submit their assignments before Friday",
+      "Students should submit their assignments by Friday",
+    );
+    expect(result.correctCount).toBe(6);
+    expect(result.accuracy).toBeCloseTo(6 / 7);
+    expect(result.errors).toContainEqual({
+      expected: "before",
+      actual: "",
+      type: "missing",
+    });
+    expect(result.errors).toContainEqual({
+      expected: "",
+      actual: "by",
+      type: "extra",
+    });
+    const kinds = result.segments.map(
+      (segment) => `${segment.kind}:${segment.text}`,
+    );
+    expect(kinds).toContain("error:by");
+    expect(kinds).toContain("omit:before");
+  });
+
+  test("pairs near-misses for the word library (stem and spelling)", () => {
+    const wordForm = diffWords("they walked home", "they walk home");
+    expect(wordForm.errors).toContainEqual({
+      expected: "walked",
+      actual: "walk",
+      type: "word_form",
+    });
+
+    const spelling = diffWords("economic growth", "econimic growth");
+    expect(spelling.correctCount).toBe(1);
+    expect(spelling.errors).toContainEqual({
+      expected: "economic",
+      actual: "econimic",
+      type: "spelling",
+    });
+  });
+
+  test("duplicate answer words need duplicate hits", () => {
+    const result = diffWords("the more the better", "the more better");
+    expect(result.correctCount).toBe(3);
+    expect(result.errors).toContainEqual({
+      expected: "the",
+      actual: "",
+      type: "missing",
+    });
+  });
+
+  test("is deterministic for identical input", () => {
+    const first = diffWords("write sentence", "write sentence now");
+    expect(diffWords("write sentence", "write sentence now")).toEqual(first);
   });
 });
