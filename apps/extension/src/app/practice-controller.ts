@@ -499,11 +499,10 @@ export class PracticeController extends EventTarget {
   async navigate(kind: "next" | "previous"): Promise<void> {
     const navigation = this.#navigation;
     const identity = this.#state.identity;
-    const epoch = this.#latestNavigationEpoch;
-    const generation = this.#initializeGeneration;
     if (!navigation || !identity || !canNavigateFromPhase(this.#state.phase)) {
       return;
     }
+    const ticket = this.ticket(identity);
     // Wrong-question drive: next/previous walks the queue, not the site order.
     if (this.#reviewQueue) {
       const step = stepQueue(this.#reviewQueue, identity.questionId, kind);
@@ -524,31 +523,20 @@ export class PracticeController extends EventTarget {
     }
     this.patch({ phase: "NAVIGATING", notice: "", siteStatus: "正在切题" });
     await this.flushDraft().catch(() => undefined);
-    if (
-      !this.isCurrentNavigationOperation(
-        navigation,
-        identity,
-        identity,
-        epoch,
-        generation,
-      )
-    )
-      return;
+    if (!ticket.valid({ phase: "NAVIGATING", site: true })) return;
     try {
       const result = await navigation.navigate({ kind });
       if (
-        !this.isCurrentNavigationOperation(
-          navigation,
-          identity,
-          result.identity,
-          result.epoch,
-          generation,
-        )
+        !ticket.valid({
+          phase: "NAVIGATING",
+          epoch: result.epoch,
+          site: result.identity,
+        })
       )
         return;
       await this.acceptQuestion(result.identity, result.epoch, false);
     } catch (error) {
-      if (this.shouldReportNavigationFailure(navigation, identity, generation))
+      if (ticket.valid({ phase: "NAVIGATING", epoch: "any" }))
         this.fail("DESYNC", "切题未被萤火虫确认", error);
     }
   }
@@ -556,14 +544,13 @@ export class PracticeController extends EventTarget {
   async navigateToQuestion(questionId: string): Promise<void> {
     const identity = this.#state.identity;
     const navigation = this.#navigation;
-    const generation = this.#initializeGeneration;
-    const initialEpoch = this.#latestNavigationEpoch;
     if (
       !identity ||
       !navigation ||
       !new Set(["ANSWERING", "REVIEW", "COMMAND"]).has(this.#state.phase)
     )
       return;
+    const ticket = this.ticket(identity);
     if (!canPersistPredictionEdition(identity.predictionEdition)) {
       this.patch({ notice: "当前题集仅会话可用；请用上一题/下一题导航" });
       return;
@@ -584,16 +571,7 @@ export class PracticeController extends EventTarget {
       this.patch({ phase: returnPhase, notice: "读取复习索引失败" });
       return;
     }
-    if (
-      !this.isCurrentNavigationOperation(
-        navigation,
-        identity,
-        identity,
-        initialEpoch,
-        generation,
-      )
-    )
-      return;
+    if (!ticket.valid({ phase: "NAVIGATING", site: true })) return;
     const target = questions.find(
       (question) => question.questionId === questionId,
     );
@@ -602,23 +580,14 @@ export class PracticeController extends EventTarget {
       return;
     }
     await this.flushDraft().catch(() => undefined);
-    if (
-      !this.isCurrentNavigationOperation(
-        navigation,
-        identity,
-        identity,
-        initialEpoch,
-        generation,
-      )
-    )
-      return;
+    if (!ticket.valid({ phase: "NAVIGATING", site: true })) return;
     this.patch({ siteStatus: "正在跳转复习题" });
     try {
       let result:
         | Awaited<ReturnType<NavigationCoordinator["navigate"]>>
         | undefined;
       let expectedIdentity = identity;
-      let expectedEpoch = initialEpoch;
+      let expectedEpoch: number | undefined;
       if (this.#site.capabilities().select) {
         result = await navigation.navigate(
           {
@@ -635,13 +604,11 @@ export class PracticeController extends EventTarget {
       } else {
         while (navigation.current.position !== target.sitePosition) {
           if (
-            !this.isCurrentNavigationOperation(
-              navigation,
-              identity,
-              expectedIdentity,
-              expectedEpoch,
-              generation,
-            )
+            !ticket.valid({
+              phase: "NAVIGATING",
+              epoch: expectedEpoch,
+              site: expectedIdentity,
+            })
           )
             return;
           result = await navigation.navigate({
@@ -659,20 +626,18 @@ export class PracticeController extends EventTarget {
         epoch: navigation.epoch,
       };
       if (
-        !this.isCurrentNavigationOperation(
-          navigation,
-          identity,
-          finalResult.identity,
-          finalResult.epoch,
-          generation,
-        )
+        !ticket.valid({
+          phase: "NAVIGATING",
+          epoch: finalResult.epoch,
+          site: finalResult.identity,
+        })
       )
         return;
       if (finalResult.identity.questionId !== target.questionId)
         throw new Error("navigation:index-mismatch");
       await this.acceptQuestion(finalResult.identity, finalResult.epoch, false);
     } catch (error) {
-      if (this.shouldReportNavigationFailure(navigation, identity, generation))
+      if (ticket.valid({ phase: "NAVIGATING", epoch: "any" }))
         this.fail("DESYNC", "索引跳转未被萤火虫确认", error);
     }
   }

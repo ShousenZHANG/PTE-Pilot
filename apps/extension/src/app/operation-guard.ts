@@ -23,10 +23,11 @@ export interface TicketCheck {
   phase?: PracticePhase;
   /**
    * Expected navigation epoch. Defaults to the epoch captured at ticket
-   * creation; pass a navigation result's epoch after adopting it, or "any"
-   * for predicates that deliberately ignore question-switch races.
+   * creation (also when undefined is passed explicitly); pass a navigation
+   * result's epoch after adopting it, or "any" for predicates that
+   * deliberately ignore question-switch races.
    */
-  epoch?: number | "any";
+  epoch?: number | "any" | undefined;
   /**
    * Site alignment: true pins the live DOM to the captured identity, an
    * explicit identity pins it to a navigation target instead.
